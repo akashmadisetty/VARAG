@@ -305,11 +305,11 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
 
         with gr.Tab("Ingest Data"):
             pdf_input = gr.File(
-                label="Upload PDF(s)", file_count="multiple", file_types=["pdf"]
+                label="Upload PDF(s)", file_count="multiple", file_types=[".pdf"]
             )
             use_ocr = gr.Checkbox(label="Use OCR (for SimpleRAG)")
             chunk_size = gr.Slider(
-                50, 5000, value=200, step=10, label="Chunk Size (for SimpleRAG)"
+                50, 5000, value=300, step=10, label="Chunk Size (for SimpleRAG)"
             )
             ingest_button = gr.Button("Ingest PDFs")
             ingest_output = gr.Markdown(
