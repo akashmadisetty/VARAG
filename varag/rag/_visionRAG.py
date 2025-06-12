@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 
 class VisionRAG:
-    SUPPORTED_MODELS = {"jinaai/jina-clip-v1": 768, "clip-ViT-B-32": 512}
+    SUPPORTED_MODELS = {"jinaai/jina-clip-v2": 768, "clip-ViT-B-32": 512}
 
     def __init__(
         self,

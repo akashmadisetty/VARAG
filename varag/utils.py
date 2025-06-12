@@ -4,7 +4,7 @@ from colpali_engine.models import ColPali
 from colpali_engine.models.paligemma.colpali.processing_colpali import ColPaliProcessor
 
 
-def get_model_colpali(model_name: str = "vidore/colpali-v1.2"):
+def get_model_colpali(model_name: str = "vidore/colpali-v1.3"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ColPali.from_pretrained(
         model_name,

@@ -18,6 +18,7 @@ from torch.utils.data import Dataset
 from sentence_transformers import SentenceTransformer
 from colpali_engine.models import ColPali
 from colpali_engine.models.paligemma.colpali.processing_colpali import ColPaliProcessor
+from colpali_engine.compression.token_pooling import HierarchicalTokenPooler
 from varag.utils import get_model_colpali
 
 T = TypeVar("T")
@@ -34,55 +35,18 @@ class ListDataset(Dataset[T]):
         return self.elements[idx]
 
 
-# class ColpaliRAG:
-#     def __init__(
-#         self,
-#         colpali_model: str = "vidore/colpali-v1.2",
-#         db: Union[lancedb.connect, None] = None,
-#         db_path: str = "~/lancedb",
-#         table_name: str = "colpali_rag_table",
-#     ):
-#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#         print(f"Using device: {self.device}")
-#         self.colpali_model, self.colpali_processor = get_model_colpali(colpali_model)
-
-#         if db is None:
-#             self.db_path = os.path.expanduser(db_path)
-#             self.db = lancedb.connect(self.db_path)
-#         else:
-#             self.db = db
-
-#         self.table_name = table_name
-
-#         self.schema = pa.schema(
-#             [
-#                 pa.field("document_name", pa.string()),
-#                 pa.field("page_number", pa.int32()),
-#                 pa.field("image", pa.string()),
-#                 pa.field("page_text", pa.string()),
-#                 pa.field("metadata", pa.string()),
-#                 pa.field("page_embedding_shape", pa.list_(pa.int64())),
-#                 pa.field(
-#                     "page_embedding_flatten",
-#                     pa.list_(pa.float32()),
-#                 ),
-#             ]
-#         )
-#         self.table = self.db.create_table(
-#             self.table_name, schema=self.schema, exist_ok=True
-#         )
-
-
 class ColpaliRAG:
     def __init__(
         self,
         colpali_model: Optional[ColPali] = None,
         colpali_processor: Optional[ColPaliProcessor] = None,
-        model_name: str = "vidore/colpali-v1.2",
+        model_name: str = "vidore/colpali-v1.3",
         db: Union[lancedb.connect, None] = None,
         db_path: str = "~/lancedb",
         table_name: str = "colpali_rag_table",
         overwrite: bool = False,
+        use_token_pooling: bool = True,
+        pool_factor: int = 3,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
@@ -93,6 +57,13 @@ class ColpaliRAG:
             self.colpali_model = colpali_model
             self.colpali_processor = colpali_processor
 
+        # Token pooling configuration
+        self.use_token_pooling = use_token_pooling
+        self.pool_factor = pool_factor
+        if self.use_token_pooling:
+            self.token_pooler = HierarchicalTokenPooler()
+            print(f"Token pooling enabled with factor {pool_factor}")
+
         if db is None:
             self.db_path = os.path.expanduser(db_path)
             self.db = lancedb.connect(self.db_path)
@@ -101,27 +72,41 @@ class ColpaliRAG:
 
         self.table_name = table_name
 
-        self.schema = pa.schema(
-            [
-                pa.field("document_name", pa.string()),
-                pa.field("page_number", pa.int32()),
-                pa.field("image", pa.string()),
-                pa.field("page_text", pa.string()),
-                pa.field("metadata", pa.string()),
-                pa.field("page_embedding_shape", pa.list_(pa.int64())),
-                pa.field(
-                    "page_embedding_flatten",
-                    pa.list_(pa.float32()),
-                ),
-            ]
-        )
-        if overwrite:
+        # Simplified schema without token pooling fields
+        self.schema = pa.schema([
+            pa.field("document_name", pa.string()),
+            pa.field("page_number", pa.int32()),
+            pa.field("image", pa.string()),
+            pa.field("page_text", pa.string()),
+            pa.field("metadata", pa.string()),
+            pa.field("page_embedding_shape", pa.list_(pa.int64())),
+            pa.field(
+                "page_embedding_flatten",
+                pa.list_(pa.float32()),
+            ),
+        ])
+        
+        # Check if table exists
+        try:
+            # Try to get the table first
+            existing_table = self.db.open_table(self.table_name)
+            
+            if overwrite:
+                # If overwrite is True, recreate the table with new schema
+                print(f"Table '{self.table_name}' already exists. Overwriting with new schema.")
+                self.table = self.db.create_table(
+                    self.table_name, schema=self.schema, mode="overwrite"
+                )
+            else:
+                # If not overwriting, use the existing table with its schema
+                print(f"Table '{self.table_name}' already exists. Using existing schema.")
+                self.table = existing_table
+        
+        except Exception:
+            # Table doesn't exist, create it
+            print(f"Creating new table '{self.table_name}'")
             self.table = self.db.create_table(
-                self.table_name, schema=self.schema, mode="overwrite"
-            )
-        else:
-            self.table = self.db.create_table(
-                self.table_name, schema=self.schema, exist_ok=True
+                self.table_name, schema=self.schema, exist_ok=False
             )
 
     def change_table(self, new_table_name: str):
@@ -173,6 +158,21 @@ class ColpaliRAG:
             with torch.no_grad():
                 batch = {k: v.to(self.device) for k, v in batch.items()}
                 embedding = self.colpali_model(**batch)
+
+                # Apply token pooling if enabled
+                if self.use_token_pooling:
+                    if verbose:
+                        print(f"Applying token pooling with factor {self.pool_factor}")
+                        print(f"Original embedding shape: {embedding.shape}")
+                    embedding = self.token_pooler.pool_embeddings(
+                        embedding,
+                        pool_factor=self.pool_factor,
+                        padding=True,
+                        padding_side=self.colpali_processor.tokenizer.padding_side,
+                    )
+                    if verbose:
+                        print(f"Pooled embedding shape: {embedding.shape}")
+
             embeddings.extend(list(torch.unbind(embedding.cpu())))
         return embeddings
 
@@ -206,7 +206,7 @@ class ColpaliRAG:
             self.pil_to_base64(img) for img in tqdm(images, disable=not verbose)
         ]
 
-        return [
+        results = [
             {
                 "document_name": file_name,
                 "page_number": i,
@@ -224,6 +224,8 @@ class ColpaliRAG:
             )
         ]
 
+        return results
+
     def extract_text_from_pdf(self, pdf_path: str) -> List[str]:
         reader = fitz.open(pdf_path)
         texts = []
@@ -239,15 +241,15 @@ class ColpaliRAG:
         metadata: Dict[str, str] = None,
         verbose: bool = False,
     ):
+        # Only recreate the table if explicitly requested to overwrite
         if overwrite:
+            print(f"Overwriting table '{self.table_name}' with new schema")
             self.table = self.db.create_table(
                 self.table_name, schema=self.schema, mode="overwrite"
             )
-        else:
-            self.table = self.db.create_table(
-                self.table_name, schema=self.schema, exist_ok=True
-            )
-
+        
+        # We don't need to create the table again here, as it was already created or opened in __init__
+        
         if isinstance(data_path, str):
             data_paths = [data_path]
         else:
@@ -337,7 +339,6 @@ class ColpaliRAG:
     def process_patch_embeddings(self, x):
         patches = np.reshape(x["page_embedding_flatten"], x["page_embedding_shape"])
         unflattended_embeddinged = torch.from_numpy(patches).to(torch.bfloat16)
-
         return unflattended_embeddinged
 
     def search(
@@ -350,6 +351,18 @@ class ColpaliRAG:
             qs = self.get_query_embedding(
                 query, model=self.colpali_model, processor=self.colpali_processor
             )
+
+            # Apply token pooling to query if database has pooled embeddings
+            if self.use_token_pooling:
+                qs["embeddings"] = [
+                    self.token_pooler.pool_embeddings(
+                        embedding.unsqueeze(0),
+                        pool_factor=self.pool_factor,
+                        padding=True,
+                        padding_side=self.colpali_processor.tokenizer.padding_side,
+                    ).squeeze(0)
+                    for embedding in qs["embeddings"]
+                ]
 
         if limit:
             print(f"Limit set and Retriving {limit} number of documents")
