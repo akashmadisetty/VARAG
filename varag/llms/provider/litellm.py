@@ -134,51 +134,6 @@ class LiteLLM:
             
         return messages
 
-    async def aquery(
-        self,
-        query: str,
-        system_prompt: Optional[str] = None,
-        context: Optional[str] = None,
-        images: Optional[List[Union[str, Image.Image]]] = None,
-        **kwargs
-    ) -> str:
-        """
-        Async query the model.
-        
-        Args:
-            query: The query text
-            system_prompt: Optional system prompt
-            context: Optional context to prepend to the query
-            images: Optional list of images (for vision models)
-            **kwargs: Additional arguments to pass to litellm
-            
-        Returns:
-            The model's response text
-        """
-        if images and not self._is_vision_model:
-            raise ValueError(f"Model {self.model} does not support vision inputs")
-            
-        messages = self._prepare_messages(
-            query=query,
-            system_prompt=system_prompt,
-            context=context,
-            images=images
-        )
-        
-        # Merge instance kwargs with method kwargs
-        call_kwargs = {**self.kwargs, **kwargs}
-        
-        try:
-            response = await litellm.acompletion(
-                model=self.model,
-                messages=messages,
-                api_key=self.api_key,
-                api_base=self.api_base,
-                **call_kwargs
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            raise Exception(f"Error calling LLM API: {str(e)}")
 
     def query(
         self,

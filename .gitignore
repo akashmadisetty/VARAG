@@ -165,3 +165,10 @@ poetry.lock
 /test_images
 
 **/lancedb
+
+#Local Environments
+/madiv_env
+/lite_env
+
+.gradio
+visiontest.py

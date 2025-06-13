@@ -14,6 +14,8 @@ import concurrent.futures
 from varag.rag import SimpleRAG, VisionRAG, ColpaliRAG, HybridColpaliRAG
 from varag.vlms import OpenAI
 from varag.llms import OpenAI as OpenAILLM
+from varag.vlms import LiteLLMVLM 
+from varag.llms import LiteLLM 
 from varag.chunking import FixedTokenChunker
 from varag.utils import get_model_colpali
 import argparse
@@ -29,9 +31,9 @@ text_embedding_model = SentenceTransformer("BAAI/bge-base-en", trust_remote_code
 # text_embedding_model = SentenceTransformer("BAAI/bge-large-en-v1.5", trust_remote_code=True)
 # text_embedding_model = SentenceTransformer("BAAI/bge-small-en-v1.5", trust_remote_code=True)
 image_embedding_model = SentenceTransformer(
-    "jinaai/jina-clip-v2", trust_remote_code=True
+    "jinaai/jina-clip-v1", trust_remote_code=True
 )
-colpali_model, colpali_processor = get_model_colpali("vidore/colpali-v1.2")
+colpali_model, colpali_processor = get_model_colpali("vidore/colpali-v1.3")
 
 # Initialize RAG instances
 simple_rag = SimpleRAG(
@@ -55,8 +57,22 @@ hybrid_rag = HybridColpaliRAG(
 )
 
 # Initialize VLM
-vlm = OpenAI()
-llm = OpenAILLM()
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+# Initialize LLM and VLM with Groq by default
+if gemini_api_key:
+    gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
+    gem_llm = LiteLLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
+    gem_vlm = LiteLLMVLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
+
+    llm = gem_llm
+    vlm = gem_vlm
+    print(f"Using Groq with model: {gemini_model}")
+else:
+    # For backward compatibility, use the existing initialization
+    vlm = OpenAI()
+    llm = OpenAILLM()
+    print("Switching to OpenAI provider as no LiteLLM API key is provided.")
 
 IngestResult = namedtuple("IngestResult", ["status_text", "progress_table"])
 
