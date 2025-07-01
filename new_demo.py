@@ -19,7 +19,7 @@ from varag.llms import LiteLLM
 from varag.chunking import FixedTokenChunker
 from varag.utils import get_model_colpali
 import argparse
-from colpali_similarity import create_similarity_mapper, analyze_multiple_images
+from colpali_similarity_v2 import create_similarity_mapper,analyze_multiple_images
 
 load_dotenv()
 
@@ -405,23 +405,32 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                         rows=2,
                         height="400px"
                     )
-            
-            # Similarity Maps Section
+              # Similarity Maps Section
             with gr.Row():
                 similarity_status = gr.Markdown("**Similarity Maps:** Click 'Generate Similarity Maps' to analyze token-level attention")
+            
+            # Token Analysis Results
+            with gr.Row():
+                token_analysis = gr.DataFrame(
+                    label="Token Analysis Results",
+                    headers=["Token", "Max Similarity", "Rank"],
+                    visible=False
+                )
             
             # Dynamic galleries for each retrieved image
             similarity_galleries = []
             for i in range(10):  # Support up to 10 retrieved images
                 with gr.Row(visible=False) as similarity_row:
-                    similarity_gallery = gr.Gallery(
-                        label=f"Page {i+1}: All Similarity Maps",
-                        show_label=True,
-                        columns=4,
-                        rows=3,
-                        height="600px"
-                    )
-                    similarity_galleries.append((similarity_row, similarity_gallery))
+                    with gr.Column():
+                        page_info = gr.Markdown(f"### 📄 Page {i+1} Token Analysis", visible=True)
+                        similarity_gallery = gr.Gallery(
+                            label=f"Token Similarity Maps (ordered by importance)",
+                            show_label=True,
+                            columns=3,
+                            rows=2,
+                            height="500px"
+                        )
+                    similarity_galleries.append((similarity_row, similarity_gallery, page_info))
             
             with gr.Row():
                 interpretation_info = gr.Markdown("""
@@ -485,29 +494,60 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         def generate_similarity_maps_for_images(retrieved_results, current_query):
             """Generate similarity maps for all retrieved ColPali images"""
             if not similarity_mapper:
-                return ["⚠️ Similarity mapper not available"] + [[]] * 10 + [gr.Row(visible=False)] * 10
+                return ["⚠️ Similarity mapper not available"] + [gr.DataFrame(visible=False)] + [[]] * 10 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 10
 
             if not retrieved_results or "ColpaliRAG" not in retrieved_results:
-                return ["❌ No ColPali results available - perform a retrieval first"] + [[]] * 10 + [gr.Row(visible=False)] * 10
+                return ["❌ No ColPali results available - perform a retrieval first"] + [gr.DataFrame(visible=False)] + [[]] * 10 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 10
             
             if not current_query:
-                return ["❌ No query available"] + [[]] * 10 + [gr.Row(visible=False)] * 10
+                return ["❌ No query available"] + [gr.DataFrame(visible=False)] + [[]] * 10 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 10
             
             colpali_images = retrieved_results.get("ColpaliRAG", [])
             
             if not colpali_images:
-                return ["❌ No images to analyze"] + [[]] * 10 + [gr.Row(visible=False)] * 10
+                return ["❌ No images to analyze"] + [gr.DataFrame(visible=False)] + [[]] * 10 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 10
             
             # Update status
-            status_text = f"🔄 Generating similarity maps for {len(colpali_images)} images with query: '{current_query}'"
+            status_text = f"🔄 Analyzing {len(colpali_images)} images for query: '{current_query}'..."
             
             # Generate similarity maps for each image
             try:
                 results = analyze_multiple_images(similarity_mapper, colpali_images, current_query)
                 
+                # Prepare detailed status and token analysis
+                token_analysis_data = []
+                if results and len(results) > 0 and results[0]["success"]:
+                    first_result = results[0]
+                    token_info = []
+                    
+                    # Create token analysis table
+                    for rank, token_data in enumerate(first_result.get("token_scores", []), 1):
+                        token = token_data["token"]
+                        sim = token_data["max_similarity"]
+                        token_info.append(f"'{token}' (sim: {sim:.3f})")
+                        token_analysis_data.append([token, f"{sim:.3f}", rank])
+                    
+                    token_summary = " | ".join(token_info)
+                    status_text = f"""✅ **Analysis Complete for Query:** "{current_query}"
+
+**🎯 Token Analysis Results:**
+{token_summary}
+
+**📊 Generated {first_result['num_visualizations']} similarity maps for {len(results)} images**
+
+**💡 How to read:** Each visualization shows where the model focuses for each token. Higher similarity scores (closer to 1.0) indicate stronger attention. Images are ordered by token importance (highest similarity first)."""
+                
+                # Create token analysis DataFrame
+                token_df = gr.DataFrame(
+                    value=token_analysis_data,
+                    headers=["Token", "Max Similarity", "Rank"],
+                    visible=True
+                )
+                
                 # Prepare outputs
                 gallery_updates = []
                 row_updates = []
+                page_info_updates = []
                 
                 for i in range(10):  # Maximum 10 galleries
                     if i < len(results):
@@ -524,21 +564,35 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                             gallery_updates.append(vis_images)
                             row_updates.append(gr.Row(visible=True))
                             
-                            # Update status with success info
-                            if i == 0:  # Update status after first image
-                                status_text = f"✅ Generated {result['num_visualizations']} similarity maps for {len(results)} images"
+                            # Create detailed page info with token breakdown
+                            token_breakdown = []
+                            for rank, token_data in enumerate(result.get("token_scores", []), 1):
+                                token = token_data["token"]
+                                sim = token_data["max_similarity"]
+                                token_breakdown.append(f"{rank}. **'{token}'** (similarity: {sim:.3f})")
+                            
+                            page_info_text = f"""### 📄 Page {i+1} - Token Similarity Analysis
+
+**Query tokens (ranked by importance):**
+{chr(10).join(token_breakdown)}
+
+**Total visualizations:** {result['num_visualizations']}"""
+                            
+                            page_info_updates.append(gr.Markdown(value=page_info_text, visible=True))
                         else:
                             gallery_updates.append([])
                             row_updates.append(gr.Row(visible=False))
+                            page_info_updates.append(gr.Markdown(visible=False))
                     else:
                         gallery_updates.append([])
                         row_updates.append(gr.Row(visible=False))
+                        page_info_updates.append(gr.Markdown(visible=False))
                 
-                return [status_text] + gallery_updates + row_updates
+                return [status_text] + [token_df] + gallery_updates + row_updates + page_info_updates
                 
             except Exception as e:
                 error_msg = f"❌ Error generating similarity maps: {str(e)}"
-                return [error_msg] + [[]] * 10 + [gr.Row(visible=False)] * 10
+                return [error_msg] + [gr.DataFrame(visible=False)] + [[]] * 10 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 10
 
         def update_retrieval_results(query, top_k, sequential):
             results, timings = retrieve_data(query, top_k, sequential)
@@ -704,13 +758,11 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             refresh_colpali_interpretation,
             inputs=[retrieved_results, current_query],
             outputs=[current_query_display, colpali_interpretation_gallery]
-        )
-
-        # Similarity maps generation handler
+        )        # Similarity maps generation handler
         generate_similarity_button.click(
             generate_similarity_maps_for_images,
             inputs=[retrieved_results, current_query],
-            outputs=[similarity_status] + [gallery for _, gallery in similarity_galleries] + [row for row, _ in similarity_galleries]
+            outputs=[similarity_status] + [token_analysis] + [gallery for _, gallery, _ in similarity_galleries] + [row for row, _, _ in similarity_galleries] + [info for _, _, info in similarity_galleries]
         )
 
         ingest_button.click(

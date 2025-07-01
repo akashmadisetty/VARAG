@@ -59,14 +59,13 @@ class ColPaliSimilarityMapper:
         img.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
     
-    def generate_similarity_maps_fast(self, image: Image.Image, query: str, max_tokens: int = 5) -> Tuple[torch.Tensor, List[str], Dict]:
+    def generate_similarity_maps(self, image: Image.Image, query: str) -> Tuple[torch.Tensor, List[str], Dict]:
         """
-        Generate similarity maps for TOP N most important tokens only (FAST VERSION).
+        Generate similarity maps for ALL tokens in the query.
         
         Args:
             image: PIL Image to analyze
             query: Query string
-            max_tokens: Maximum number of top tokens to process
             
         Returns:
             Tuple of (similarity_maps, query_tokens, metadata)
@@ -74,7 +73,7 @@ class ColPaliSimilarityMapper:
         if not COLPALI_AVAILABLE:
             raise ImportError("ColPali interpretability tools not available")
         
-        print(f"🔄 Processing query: '{query[:50]}...' (Max tokens: {max_tokens})")
+        print(f"🔄 Processing query: '{query}'")
         
         # Preprocess inputs
         batch_images = self.processor.process_images([image]).to(self.device)
@@ -105,131 +104,94 @@ class ColPaliSimilarityMapper:
         )
         
         # Get the similarity map for our input image
-        all_similarity_maps = batched_similarity_maps[0]  # (query_length, n_patches_x, n_patches_y)
-          # Tokenize the query
+        similarity_maps = batched_similarity_maps[0]  # (query_length, n_patches_x, n_patches_y)
+        
+        # Tokenize the query
         query_tokens = self.processor.tokenizer.tokenize(query)
         
-        # Calculate importance scores for all tokens first
-        token_importance_scores = []
-        for i in range(min(len(query_tokens), all_similarity_maps.shape[0])):
-            max_sim = all_similarity_maps[i].max().item()
-            token_importance_scores.append((i, max_sim, query_tokens[i]))
-        
-        # Determine if we should process all tokens or filter to top N
-        if max_tokens >= len(query_tokens):
-            print(f"🎯 Processing ALL {len(query_tokens)} tokens (max_tokens={max_tokens} >= total tokens)")
-            # Use all tokens in original order
-            top_token_indices = list(range(len(query_tokens)))
-            top_tokens = query_tokens
-            top_similarity_maps = all_similarity_maps
-        else:
-            print(f"🔍 Finding top {max_tokens} most important tokens from {len(query_tokens)} total tokens...")
-            # Sort by importance and take top N
-            token_importance_scores.sort(key=lambda x: x[1], reverse=True)
-            top_token_indices = [x[0] for x in token_importance_scores[:max_tokens]]
-            top_tokens = [x[2] for x in token_importance_scores[:max_tokens]]
-            
-            # Only keep similarity maps for top tokens
-            top_similarity_maps = all_similarity_maps[top_token_indices]
-        
-        print(f"✅ Selected top tokens: {top_tokens}")
+        print(f"✅ Generated similarity maps for {len(query_tokens)} tokens")
         
         # Create metadata
         metadata = {
             "image_size": image.size,
             "n_patches": n_patches,
-            "similarity_shape": top_similarity_maps.shape,
-            "max_similarity": top_similarity_maps.max().item(),
+            "similarity_shape": similarity_maps.shape,
+            "max_similarity": similarity_maps.max().item(),
             "query": query,
-            "total_tokens": len(query_tokens),
-            "processed_tokens": len(top_tokens),
-            "top_token_scores": [(token, score) for _, score, token in token_importance_scores[:max_tokens]]
+            "num_tokens": len(query_tokens),
         }
         
-        return top_similarity_maps, top_tokens, metadata
+        return similarity_maps, query_tokens, metadata
     
-    def create_token_similarity_visualizations_fast(
+    def create_all_similarity_visualizations(
         self, 
         image: Image.Image, 
         similarity_maps: torch.Tensor, 
         query_tokens: List[str]
     ) -> List[str]:
         """
-        Create optimized similarity visualizations with lower DPI for speed.
+        Create similarity visualizations for all tokens using plot_all_similarity_maps.
         
         Args:
             image: Original PIL Image
-            similarity_maps: Tensor of similarity maps for selected tokens only
-            query_tokens: List of selected query tokens
+            similarity_maps: Tensor of similarity maps for all tokens
+            query_tokens: List of all query tokens
             
         Returns:
             List of base64-encoded PNG images
         """
+        print(f"🎨 Creating visualizations for all {len(query_tokens)} tokens...")
+        
+        # Use plot_all_similarity_maps to generate all plots at once
+        plots = plot_all_similarity_maps(
+            image=image,
+            query_tokens=query_tokens,
+            similarity_maps=similarity_maps,
+        )
+        
         visualizations = []
-        num_tokens = len(query_tokens)
         
-        print(f"🎨 Creating {num_tokens} visualizations with optimized settings...")
-        
-        for token_idx in range(num_tokens):
+        for idx, (fig, ax) in enumerate(plots):
             try:
-                # Get similarity map for this token
-                current_similarity_map = similarity_maps[token_idx]
-                max_sim = current_similarity_map.max().item()
-                  # Create the visualization with optimized settings
-                fig, ax = plot_similarity_map(
-                    image=image,
-                    similarity_map=current_similarity_map,
-                    figsize=(8, 8),
-                    show_colorbar=False
-                )
-                
-                # Set title with token information
-                token_text = query_tokens[token_idx]
-                ax.set_title(
-                    f"Token #{token_idx+1}: '{token_text}'\nMax Similarity: {max_sim:.3f}",
-                    fontsize=12,
-                    fontweight='bold'
-                )
-                
-                # OPTIMIZATION: Save with lower DPI and quality for speed
+                # Convert matplotlib figure to base64
                 buffer = io.BytesIO()
-                fig.savefig(buffer, format='PNG', bbox_inches='tight', dpi=80, facecolor='white')
+                fig.savefig(buffer, format='PNG', bbox_inches='tight', dpi=100, facecolor='white')
                 buffer.seek(0)
                 img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
                 visualizations.append(img_base64)
                 
-                # IMPORTANT: Clean up immediately to free memory
+                # Clean up to free memory
                 plt.close(fig)
                 buffer.close()
                 
-                print(f"  ✅ {token_idx+1}/{num_tokens}: '{token_text}' (sim: {max_sim:.3f})")
+                token_text = query_tokens[idx] if idx < len(query_tokens) else f"Token_{idx}"
+                max_sim = similarity_maps[idx].max().item() if idx < similarity_maps.shape[0] else 0.0
+                print(f"  ✅ {idx+1}/{len(query_tokens)}: '{token_text}' (sim: {max_sim:.3f})")
                 
             except Exception as e:
-                print(f"  ❌ Error generating visualization for token {token_idx}: {str(e)}")
+                print(f"  ❌ Error generating visualization for token {idx}: {str(e)}")
                 continue
         
         print(f"🎉 Generated {len(visualizations)} visualizations successfully!")
         return visualizations
     
-    def analyze_image_with_query_fast(
+    def analyze_image_with_query(
         self, 
         image_input: Union[str, Image.Image], 
-        query: str, 
-        max_tokens: int = 5
+        query: str
     ) -> Dict:
         """
-        FAST analysis pipeline for a single image - processes only top N tokens.
+        Complete analysis pipeline for a single image - processes ALL tokens.
         
         Args:
             image_input: Base64-encoded image string OR PIL Image object
             query: Query string
-            max_tokens: Maximum number of top tokens to analyze
             
         Returns:
             Dictionary containing analysis results
         """
         try:
-            print(f"🚀 Starting FAST analysis (max_tokens={max_tokens})")
+            print(f"🚀 Starting similarity analysis")
             
             # Handle both base64 strings and PIL Images
             if isinstance(image_input, str):
@@ -243,15 +205,15 @@ class ColPaliSimilarityMapper:
             else:
                 raise ValueError(f"Unsupported image input type: {type(image_input)}. Expected str (base64) or PIL Image.")
             
-            # Generate similarity maps for top tokens only
-            similarity_maps, query_tokens, metadata = self.generate_similarity_maps_fast(image, query, max_tokens)
+            # Generate similarity maps for all tokens
+            similarity_maps, query_tokens, metadata = self.generate_similarity_maps(image, query)
             
-            # Create optimized visualizations
-            visualizations = self.create_token_similarity_visualizations_fast(
+            # Create visualizations using plot_all_similarity_maps
+            visualizations = self.create_all_similarity_visualizations(
                 image, similarity_maps, query_tokens
             )
             
-            # Calculate token importance scores for the selected tokens
+            # Calculate token importance scores for all tokens
             token_scores = []
             for i, token in enumerate(query_tokens):
                 if i < similarity_maps.shape[0]:
@@ -270,16 +232,15 @@ class ColPaliSimilarityMapper:
                 "visualizations": visualizations,
                 "token_scores": token_scores,
                 "metadata": metadata,
-                "num_tokens": metadata["total_tokens"],
+                "num_tokens": len(query_tokens),
                 "num_visualizations": len(visualizations),
-                "processed_tokens": metadata["processed_tokens"]
             }
             
-            print(f"✅ FAST analysis complete: {len(visualizations)} visualizations for {metadata['processed_tokens']}/{metadata['total_tokens']} tokens")
+            print(f"✅ Analysis complete: {len(visualizations)} visualizations for {len(query_tokens)} tokens")
             return result
             
         except Exception as e:
-            error_msg = f"❌ Error in fast analysis: {str(e)}"
+            error_msg = f"❌ Error in analysis: {str(e)}"
             print(error_msg)
             return {
                 "success": False,
@@ -289,26 +250,7 @@ class ColPaliSimilarityMapper:
                 "metadata": {},
                 "num_tokens": 0,
                 "num_visualizations": 0,
-                "processed_tokens": 0
             }
-    
-    def analyze_image_with_query_all_tokens(
-        self, 
-        image_input: Union[str, Image.Image], 
-        query: str
-    ) -> Dict:
-        """
-        Complete analysis pipeline for a single image - processes ALL tokens.
-        
-        Args:
-            image_input: Base64-encoded image string OR PIL Image object
-            query: Query string
-            
-        Returns:
-            Dictionary containing analysis results
-        """
-        # Simply call the fast method with a very high max_tokens to get ALL tokens
-        return self.analyze_image_with_query_fast(image_input, query, max_tokens=1000)
 
 
 def create_similarity_mapper(model, processor):
@@ -335,79 +277,13 @@ def create_similarity_mapper(model, processor):
         return None
 
 
-def analyze_multiple_images_fast(
-    similarity_mapper: ColPaliSimilarityMapper,
-    images: List[Union[str, Image.Image]],  # Can be base64 strings or PIL Images
-    query: str,
-    max_tokens_per_image: int = 5
-) -> List[Dict]:
-    """
-    FAST analysis of multiple images with the same query - optimized for speed.
-    
-    Args:
-        similarity_mapper: ColPaliSimilarityMapper instance
-        images: List of base64-encoded images OR PIL Image objects
-        query: Query string
-        max_tokens_per_image: Maximum tokens to analyze per image
-        
-    Returns:
-        List of analysis results for each image
-    """
-    if not similarity_mapper:
-        print("❌ No similarity mapper provided")
-        return [{"success": False, "error": "No similarity mapper available"}] * len(images)
-    
-    results = []
-    
-    print(f"\n🚀 FAST Multi-Image Analysis Started")
-    print(f"📊 Processing {len(images)} images")
-    print(f"🔍 Query: '{query}'")
-    print(f"🎯 Max tokens per image: {max_tokens_per_image}")
-    print("-" * 60)
-    
-    for i, image_input in enumerate(images):
-        print(f"\n📄 Processing Page {i+1}/{len(images)}...")
-        
-        # Determine image type for better error reporting
-        if isinstance(image_input, str):
-            print(f"📸 Input type: Base64 string (length: {len(image_input)})")
-        elif isinstance(image_input, Image.Image):
-            print(f"📸 Input type: PIL Image ({image_input.size}, {image_input.mode})")
-        else:
-            print(f"📸 Input type: Unknown ({type(image_input)})")
-        
-        result = similarity_mapper.analyze_image_with_query_fast(
-            image_input, query, max_tokens_per_image
-        )
-        result["image_index"] = i
-        result["page_info"] = f"Page {i+1}"
-        
-        if result["success"]:
-            print(f"✅ Page {i+1}: Generated {result['num_visualizations']} visualizations")
-        else:
-            print(f"❌ Page {i+1}: Failed - {result.get('error', 'Unknown error')}")
-        
-        results.append(result)
-    
-    # Summary
-    successful = sum(1 for r in results if r.get("success", False))
-    total_visualizations = sum(r.get("num_visualizations", 0) for r in results)
-    
-    print(f"\n🎉 FAST Analysis Complete!")
-    print(f"✅ Successfully processed: {successful}/{len(images)} pages")
-    print(f"🎨 Total visualizations generated: {total_visualizations}")
-    print("-" * 60)
-    
-    return results
-
-
-def analyze_multiple_images_all_tokens(
+def analyze_multiple_images(
     similarity_mapper: ColPaliSimilarityMapper,
     images: List[Union[str, Image.Image]],  # Can be base64 strings or PIL Images
     query: str
 ) -> List[Dict]:
     """
-    Complete analysis of multiple images with the same query - processes ALL tokens.
+    Analysis of multiple images with the same query - processes ALL tokens.
     
     Args:
         similarity_mapper: ColPaliSimilarityMapper instance
@@ -423,7 +299,7 @@ def analyze_multiple_images_all_tokens(
     
     results = []
     
-    print(f"\n🚀 COMPLETE Multi-Image Analysis Started")
+    print(f"\n🚀 Multi-Image Analysis Started")
     print(f"📊 Processing {len(images)} images")
     print(f"🔍 Query: '{query}'")
     print(f"🎯 Processing ALL tokens in query")
@@ -440,9 +316,7 @@ def analyze_multiple_images_all_tokens(
         else:
             print(f"📸 Input type: Unknown ({type(image_input)})")
         
-        result = similarity_mapper.analyze_image_with_query_all_tokens(
-            image_input, query
-        )
+        result = similarity_mapper.analyze_image_with_query(image_input, query)
         result["image_index"] = i
         result["page_info"] = f"Page {i+1}"
         
@@ -457,9 +331,56 @@ def analyze_multiple_images_all_tokens(
     successful = sum(1 for r in results if r.get("success", False))
     total_visualizations = sum(r.get("num_visualizations", 0) for r in results)
     
-    print(f"\n🎉 COMPLETE Analysis Complete!")
+    print(f"\n🎉 Analysis Complete!")
     print(f"✅ Successfully processed: {successful}/{len(images)} pages")
     print(f"🎨 Total visualizations generated: {total_visualizations}")
     print("-" * 60)
     
     return results
+
+
+# Example usage function that mimics your provided example
+def example_usage():
+    """
+    Example showing how to use the refactored similarity mapper.
+    This mimics the example you provided.
+    """
+    import torch
+    from colpali_engine.models import ColPali, ColPaliProcessor
+    from colpali_engine.utils.torch_utils import get_torch_device
+    
+    model_name = "vidore/colpali-v1.3"
+    device = get_torch_device("auto")
+    
+    # Load the model
+    model = ColPali.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,
+        device_map=device,
+    ).eval()
+    
+    # Load the processor
+    processor = ColPaliProcessor.from_pretrained(model_name)
+    
+    # Create similarity mapper
+    similarity_mapper = create_similarity_mapper(model, processor)
+    
+    # Load the image and query
+    image = Image.open("research_paper_gpu.png")
+    query = "How many GPUs are used in the training of this model?"
+    
+    # Analyze the image with the query
+    result = similarity_mapper.analyze_image_with_query(image, query)
+    
+    if result["success"]:
+        print(f"Generated {result['num_visualizations']} similarity map visualizations")
+        print(f"Token scores: {result['token_scores']}")
+        
+        # The visualizations are now in result["visualizations"] as base64 strings
+        # You can save them or display them as needed
+        for i, viz_base64 in enumerate(result["visualizations"]):
+            # Convert back to PIL and save if needed
+            viz_img = Image.open(io.BytesIO(base64.b64decode(viz_base64)))
+            viz_img.save(f"similarity_map_{i}.png")
+    else:
+        print(f"Analysis failed: {result['error']}")
