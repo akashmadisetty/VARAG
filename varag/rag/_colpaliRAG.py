@@ -337,9 +337,14 @@ class ColpaliRAG:
         return q
 
     def process_patch_embeddings(self, x):
-        patches = np.reshape(x["page_embedding_flatten"], x["page_embedding_shape"])
-        unflattended_embeddinged = torch.from_numpy(patches).to(torch.bfloat16)
-        return unflattended_embeddinged
+        try:
+            patches = np.reshape(x["page_embedding_flatten"], x["page_embedding_shape"])
+            unflattended_embeddinged = torch.from_numpy(patches).to(torch.bfloat16)
+            return unflattended_embeddinged
+        except Exception as e:
+            print(f"Error processing embeddings: {str(e)}")
+            # Return a zero tensor with the expected shape as a fallback
+            return torch.zeros(x["page_embedding_shape"], dtype=torch.bfloat16)
 
     def search(
         self,
