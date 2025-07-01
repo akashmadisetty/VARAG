@@ -381,7 +381,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             gr.Markdown("""
             ## 🔍 ColPali Interpretation Dashboard
             
-            This section helps you understand what ColPali RAG is retrieving and why. 
+            This section helps you understand what ColPali RAG is retrieving and how. 
             First, perform a retrieval in the "Retrieve and Query Data" tab, then come here to analyze the results.
             """)
             
@@ -450,8 +450,6 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             with gr.Row():
                 gr.Markdown("""
                 ### 🚀 Advanced Features Coming Soon:
-                - **Similarity Heat Maps**: Visual attention mapping 
-                - **Token Analysis**: See which query words matter most
                 - **Query Optimization**: Suggestions for better retrieval
                 - **Comparative Analysis**: Compare multiple retrievals
                 """)
