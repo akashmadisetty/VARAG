@@ -65,10 +65,15 @@ def optimize_for_t4_gpu():
     """Apply optimization settings for T4 GPU"""
     print("🔧 Applying T4 GPU optimizations...")
     
-    # Set memory fraction to prevent OOM
     if torch.cuda.is_available():
         # Reserve some memory for other processes
         torch.cuda.set_per_process_memory_fraction(0.85)
+        
+        # Check BFloat16 support
+        if torch.cuda.is_bf16_supported():
+            print("✅ BFloat16 supported - models will use BFloat16 precision")
+        else:
+            print("⚠️ BFloat16 not supported - models will use Float16 precision")
         
         # Enable memory efficient attention if available
         try:

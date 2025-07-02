@@ -43,6 +43,15 @@ except ImportError:
     def memory_efficient_inference_settings(): pass
     def check_memory_for_comparison(): return True, "Memory check disabled"
 
+# Import safe model loader
+try:
+    from safe_model_loader import safe_get_model_colpali
+    print("✅ Safe model loader available")
+    use_safe_loader = True
+except ImportError:
+    print("⚠️ Safe model loader not available - using default")
+    use_safe_loader = False
+
 load_dotenv()
 
 # Apply memory optimizations early
@@ -72,14 +81,50 @@ FINETUNED_MODEL_NAME = "akashmadisetty/colpali-merged-model-hi-10k"
 
 # Currently active model - start with base model for backward compatibility
 current_model_name = BASE_MODEL_NAME
-colpali_model, colpali_processor = get_model_colpali(current_model_name)
 
-# Memory optimization: Use half precision and enable memory efficient attention
-if hasattr(colpali_model, 'half'):
-    colpali_model = colpali_model.half()
+# Load model with correct precision for ColPali
+try:
+    if use_safe_loader:
+        colpali_model, colpali_processor = safe_get_model_colpali(current_model_name)
+    else:
+        colpali_model, colpali_processor = get_model_colpali(current_model_name)
+        
+        # Check current model precision and device
+        current_dtype = next(colpali_model.parameters()).dtype
+        current_device = next(colpali_model.parameters()).device
+        
+        print(f"✅ Model loaded with dtype: {current_dtype}")
+        print(f"✅ Model loaded on device: {current_device}")
+        
+        # Only apply precision optimization if safe to do so
+        if torch.cuda.is_available() and current_device.type == 'cuda':
+            if current_dtype == torch.bfloat16:
+                print(f"✅ Model already optimized with BFloat16")
+            elif current_dtype == torch.float32 and torch.cuda.is_bf16_supported():
+                try:
+                    colpali_model = colpali_model.to(torch.bfloat16)
+                    print(f"✅ Model converted to BFloat16 for memory efficiency")
+                except Exception as precision_error:
+                    print(f"⚠️ BFloat16 conversion failed: {precision_error}")
+                    print(f"✅ Using original precision")
+            else:
+                print(f"✅ Using original model precision")
+        else:
+            print(f"✅ Model loaded with default settings")
+        
+except Exception as e:
+    print(f"❌ Error loading model {current_model_name}: {e}")
+    print("🔄 Trying fallback loading without optimizations...")
+    try:
+        colpali_model, colpali_processor = get_model_colpali(current_model_name)
+        print(f"✅ Model loaded with fallback method")
+    except Exception as fallback_error:
+        print(f"❌ Fallback loading also failed: {fallback_error}")
+        raise
 
 print(f"✅ ColPali model loaded: {current_model_name}")
-print(f"🔧 Model using half precision for memory efficiency")
+print(f"🔧 Final model device: {next(colpali_model.parameters()).device}")
+print(f"🔧 Final model dtype: {next(colpali_model.parameters()).dtype}")
 
 # Initialize similarity mapper for current model
 try:
@@ -100,28 +145,51 @@ def load_model(model_name):
     
     try:
         print(f"🔄 Switching from {current_model_name} to {model_name}...")
-        
-        # Clear current model from memory
+          # Clear current model from memory
         if 'colpali_model' in globals():
             del colpali_model
         if 'colpali_processor' in globals():
             del colpali_processor
         if 'similarity_mapper' in globals():
             del similarity_mapper
-          # Force garbage collection and clear CUDA cache
+        
+        # Force garbage collection and clear CUDA cache
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
         
-        print_memory_status()  # Show memory status before loading
-        
-        # Load new model
-        colpali_model, colpali_processor = get_model_colpali(model_name)
-        
-        # Apply memory optimizations
-        if hasattr(colpali_model, 'half'):
-            colpali_model = colpali_model.half()
+        print_memory_status()  # Show memory status before loading        # Load new model
+        if use_safe_loader:
+            colpali_model, colpali_processor = safe_get_model_colpali(model_name)
+        else:
+            colpali_model, colpali_processor = get_model_colpali(model_name)
+            
+            # Apply memory optimizations with safe precision handling
+            try:
+                current_dtype = next(colpali_model.parameters()).dtype
+                current_device = next(colpali_model.parameters()).device
+                
+                print(f"✅ New model loaded with dtype: {current_dtype}")
+                print(f"✅ New model loaded on device: {current_device}")
+                
+                # Only optimize if safe and beneficial
+                if torch.cuda.is_available() and current_device.type == 'cuda':
+                    if current_dtype == torch.bfloat16:
+                        print(f"✅ Model already optimized with BFloat16")
+                    elif current_dtype == torch.float32 and torch.cuda.is_bf16_supported():
+                        try:
+                            colpali_model = colpali_model.to(torch.bfloat16)
+                            print(f"✅ Model converted to BFloat16")
+                        except Exception as precision_error:
+                            print(f"⚠️ BFloat16 conversion failed: {precision_error}")
+                            print(f"✅ Using original precision")
+                    else:
+                        print(f"✅ Using original model precision")
+                
+            except Exception as precision_error:
+                print(f"⚠️ Could not optimize precision: {precision_error}")
+                print(f"✅ Model loaded with default settings")
         
         # Create new similarity mapper
         similarity_mapper = create_similarity_mapper(colpali_model, colpali_processor)

@@ -13,7 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description="Start ColPali Model Comparison with Memory Optimizations")
     parser.add_argument("--share", action="store_true", help="Enable Gradio share feature")
     parser.add_argument("--port", type=int, default=7860, help="Port for Gradio server")
-    parser.add_argument("--memory-check", action="store_true", default=True,help="Run memory check before starting")
+    parser.add_argument("--memory-check", action="store_true", default=True, help="Run memory check before starting")
     parser.add_argument("--optimize", action="store_true", default=True, help="Apply memory optimizations")
     
     args = parser.parse_args()
@@ -37,6 +37,10 @@ def main():
         os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
         os.environ["GRADIO_CONCURRENCY_COUNT"] = "1"
         os.environ["GRADIO_SERVER_PORT"] = str(args.port)
+        
+        # Add precision safety
+        print("🔧 Applying precision safety measures...")
+        os.environ["FORCE_SAFE_PRECISION"] = "1"
     
     print("🎯 Starting Gradio interface...")
     try:
