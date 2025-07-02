@@ -21,7 +21,34 @@ from varag.utils import get_model_colpali
 import argparse
 from colpali_similarity_v2 import create_similarity_mapper,analyze_multiple_images
 
+# Import memory optimization utilities
+try:
+    from memory_optimizer import (
+        print_memory_status, 
+        clear_memory, 
+        optimize_for_t4_gpu,
+        memory_efficient_inference_settings,
+        check_memory_for_comparison
+    )
+    print("✅ Memory optimizer loaded")
+except ImportError:
+    print("⚠️ Memory optimizer not available - using basic memory management")
+    def print_memory_status(): pass
+    def clear_memory(): 
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    def optimize_for_t4_gpu(): pass
+    def memory_efficient_inference_settings(): pass
+    def check_memory_for_comparison(): return True, "Memory check disabled"
+
 load_dotenv()
+
+# Apply memory optimizations early
+print("🔧 Applying memory optimizations for T4 GPU...")
+optimize_for_t4_gpu()
+memory_efficient_inference_settings()
 
 # Initialize shared database
 shared_db = lancedb.connect("~/rag_demo_db")
@@ -35,30 +62,85 @@ image_embedding_model = SentenceTransformer(
     "jinaai/jina-clip-v1", trust_remote_code=True
 )
 
-# Initialize both base and fine-tuned ColPali models for comparison
-base_colpali_model, base_colpali_processor = get_model_colpali("vidore/colpali-v1.3")
-finetuned_colpali_model, finetuned_colpali_processor = get_model_colpali("akashmadisetty/colpali-merged-model-hi-10k")
+# Memory-optimized approach: Only load one model at a time
+import torch
+import gc
 
-# Use base model for main RAG functionality (for backward compatibility)
-colpali_model, colpali_processor = base_colpali_model, base_colpali_processor
+# Model configurations
+BASE_MODEL_NAME = "vidore/colpali-v1.3"
+FINETUNED_MODEL_NAME = "akashmadisetty/colpali-merged-model-hi-10k"
 
-# Initialize ColPali similarity mappers for comparison
+# Currently active model - start with base model for backward compatibility
+current_model_name = BASE_MODEL_NAME
+colpali_model, colpali_processor = get_model_colpali(current_model_name)
+
+# Memory optimization: Use half precision and enable memory efficient attention
+if hasattr(colpali_model, 'half'):
+    colpali_model = colpali_model.half()
+
+print(f"✅ ColPali model loaded: {current_model_name}")
+print(f"🔧 Model using half precision for memory efficiency")
+
+# Initialize similarity mapper for current model
 try:
-    base_similarity_mapper = create_similarity_mapper(base_colpali_model, base_colpali_processor)
-    print("✅ Base ColPali similarity mapper (vidore/colpali-v1.3) initialized successfully")
+    similarity_mapper = create_similarity_mapper(colpali_model, colpali_processor)
+    print("✅ ColPali similarity mapper initialized successfully")
 except Exception as e:
-    print(f"⚠️ Warning: Could not initialize base similarity mapper: {e}")
-    base_similarity_mapper = None
+    print(f"⚠️ Warning: Could not initialize similarity mapper: {e}")
+    similarity_mapper = None
 
-try:
-    finetuned_similarity_mapper = create_similarity_mapper(finetuned_colpali_model, finetuned_colpali_processor)
-    print("✅ Fine-tuned ColPali similarity mapper (akashmadisetty/colpali-merged-model-hi-10k) initialized successfully")
-except Exception as e:
-    print(f"⚠️ Warning: Could not initialize fine-tuned similarity mapper: {e}")
-    finetuned_similarity_mapper = None
+# Model management functions for dynamic loading
+def load_model(model_name):
+    """Load a specific ColPali model and clear previous model from memory"""
+    global colpali_model, colpali_processor, current_model_name, similarity_mapper
+    
+    if current_model_name == model_name:
+        print(f"✅ Model {model_name} already loaded")
+        return True
+    
+    try:
+        print(f"🔄 Switching from {current_model_name} to {model_name}...")
+        
+        # Clear current model from memory
+        if 'colpali_model' in globals():
+            del colpali_model
+        if 'colpali_processor' in globals():
+            del colpali_processor
+        if 'similarity_mapper' in globals():
+            del similarity_mapper
+          # Force garbage collection and clear CUDA cache
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        print_memory_status()  # Show memory status before loading
+        
+        # Load new model
+        colpali_model, colpali_processor = get_model_colpali(model_name)
+        
+        # Apply memory optimizations
+        if hasattr(colpali_model, 'half'):
+            colpali_model = colpali_model.half()
+        
+        # Create new similarity mapper
+        similarity_mapper = create_similarity_mapper(colpali_model, colpali_processor)
+        
+        current_model_name = model_name
+        print(f"✅ Successfully switched to {model_name}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error switching to {model_name}: {e}")
+        return False
 
-# Keep original similarity_mapper for backward compatibility
-similarity_mapper = base_similarity_mapper
+def get_current_model_info():
+    """Get information about currently loaded model"""
+    return {
+        "name": current_model_name,
+        "is_base": current_model_name == BASE_MODEL_NAME,
+        "is_finetuned": current_model_name == FINETUNED_MODEL_NAME
+    }
 
 # Initialize RAG instances
 simple_rag = SimpleRAG(
@@ -397,8 +479,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             gr.Markdown("""
             ## 🔍 ColPali Model Comparison Dashboard
             
-            This section helps you compare the base ColPali model (`vidore/colpali-v1.3`) with your fine-tuned model (`akashmadisetty/colpali-merged-model-hi-10k`). 
-            First, perform a retrieval in the "Retrieve and Query Data" tab, then come here to analyze and compare the results.
+            This section helps you compare the base ColPali model (`vidore/colpali-v1.3`) with your fine-tuned model (`akashmadisetty/colpali-merged-model-hi-10k`).            First, perform a retrieval in the "Retrieve and Query Data" tab, then come here to analyze and compare the results.
             """)
             
             with gr.Row():
@@ -409,6 +490,24 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                         interactive=False,
                         lines=3
                     )
+                    
+                    # Model selection and management
+                    with gr.Row():
+                        current_model_display = gr.Textbox(
+                            label="Currently Loaded Model",
+                            value=current_model_name,
+                            interactive=False
+                        )
+                    
+                    with gr.Row():
+                        model_selector = gr.Dropdown(
+                            choices=[BASE_MODEL_NAME, FINETUNED_MODEL_NAME],
+                            value=current_model_name,
+                            label="Switch Model (for memory efficiency)",
+                            interactive=True
+                        )
+                        switch_model_button = gr.Button("🔄 Switch Model", variant="secondary", size="sm")
+                    
                     refresh_interpretation_button = gr.Button("🔄 Refresh ColPali Results", variant="primary")
                     generate_comparison_button = gr.Button("🎯 Generate Model Comparison", variant="secondary")
                     
@@ -510,7 +609,27 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         retrieved_results = gr.State({})
         current_query = gr.State("")
 
+        def switch_model_handler(selected_model):
+            """Handle model switching with memory management"""
+            try:
+                if load_model(selected_model):
+                    return f"✅ Successfully switched to: {selected_model}", selected_model
+                else:
+                    return f"❌ Failed to switch to: {selected_model}", get_current_model_info()["name"]
+            except Exception as e:
+                return f"❌ Error switching model: {str(e)}", get_current_model_info()["name"]
+
         def refresh_colpali_interpretation(retrieved_results, current_query):
+            """Refresh the ColPali interpretation with current query and results"""
+            if not retrieved_results or "ColpaliRAG" not in retrieved_results:
+                return "No ColPali results available - perform a retrieval first", []
+            
+            if not current_query:
+                return "No query available", []
+            
+            colpali_images = retrieved_results.get("ColpaliRAG", [])
+            
+            return current_query, colpali_images
             """Refresh the ColPali interpretation with current query and results"""
             if not retrieved_results or "ColpaliRAG" not in retrieved_results:
                 return "No ColPali results available - perform a retrieval first", []
@@ -524,8 +643,8 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
 
         def generate_model_comparison_for_images(retrieved_results, current_query):
             """Generate and compare similarity maps for both base and fine-tuned ColPali models"""
-            if not base_similarity_mapper or not finetuned_similarity_mapper:
-                return ["⚠️ One or both similarity mappers not available"] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
+            if not similarity_mapper:
+                return ["⚠️ Similarity mapper not available"] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
 
             if not retrieved_results or "ColpaliRAG" not in retrieved_results:
                 return ["❌ No ColPali results available - perform a retrieval first"] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
@@ -541,13 +660,31 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             # Update status
             status_text = f"🔄 Comparing models on {len(colpali_images)} images for query: '{current_query}'..."
             
-            # Generate similarity maps for both models
+            # Generate similarity maps for both models sequentially to save memory
             try:
+                # Store current model info
+                original_model = get_current_model_info()
+                
                 # Generate results for base model
-                base_results = analyze_multiple_images(base_similarity_mapper, colpali_images, current_query)
+                print(f"🔄 Loading base model for comparison...")
+                if not load_model(BASE_MODEL_NAME):
+                    return ["❌ Failed to load base model"] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
+                
+                base_results = analyze_multiple_images(similarity_mapper, colpali_images, current_query)
+                print(f"✅ Base model analysis complete")
                 
                 # Generate results for fine-tuned model
-                finetuned_results = analyze_multiple_images(finetuned_similarity_mapper, colpali_images, current_query)
+                print(f"🔄 Loading fine-tuned model for comparison...")
+                if not load_model(FINETUNED_MODEL_NAME):
+                    return ["❌ Failed to load fine-tuned model"] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
+                
+                finetuned_results = analyze_multiple_images(similarity_mapper, colpali_images, current_query)
+                print(f"✅ Fine-tuned model analysis complete")
+                
+                # Restore original model if different
+                if original_model["name"] != current_model_name:
+                    print(f"🔄 Restoring original model: {original_model['name']}")
+                    load_model(original_model["name"])
                 
                 # Prepare comparison status and token analysis
                 base_token_analysis_data = []
@@ -577,7 +714,9 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
 **💡 How to compare:** 
 - Look at token similarity scores in the tables below
 - Compare attention patterns in the side-by-side galleries
-- Higher similarity scores indicate stronger model focus on that token"""
+- Higher similarity scores indicate stronger model focus on that token
+
+**🔧 Memory Optimization:** Models are loaded sequentially to fit in T4 GPU memory"""
                 
                 # Create token analysis DataFrames
                 base_token_df = gr.DataFrame(
@@ -592,32 +731,47 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                     visible=True
                 )
                 
-                # Prepare outputs for galleries
+                # Prepare outputs for galleries with memory-efficient processing
                 base_gallery_updates = []
                 finetuned_gallery_updates = []
                 row_updates = []
                 base_page_info_updates = []
                 finetuned_page_info_updates = []
                 
-                for i in range(10):  # Maximum 10 galleries
-                    if i < len(base_results) and i < len(finetuned_results):
+                # Process images in smaller batches to avoid memory issues
+                max_images = min(len(base_results), len(finetuned_results), 5)  # Limit to 5 images to save memory
+                
+                for i in range(10):  # Still support up to 10 galleries in UI
+                    if i < max_images:
                         base_result = base_results[i]
                         finetuned_result = finetuned_results[i]
                         
                         if base_result["success"] and finetuned_result["success"]:
                             # Convert base64 visualizations to images for base model
                             base_vis_images = []
-                            for vis_b64 in base_result["visualizations"]:
-                                img_data = base64.b64decode(vis_b64)
-                                img = Image.open(io.BytesIO(img_data))
-                                base_vis_images.append(img)
+                            for j, vis_b64 in enumerate(base_result["visualizations"][:6]):  # Limit to 6 visualizations per image
+                                try:
+                                    img_data = base64.b64decode(vis_b64)
+                                    img = Image.open(io.BytesIO(img_data))
+                                    # Resize image to reduce memory usage
+                                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                                    base_vis_images.append(img)
+                                except Exception as e:
+                                    print(f"Error processing base model visualization {j}: {e}")
+                                    continue
                             
                             # Convert base64 visualizations to images for fine-tuned model
                             finetuned_vis_images = []
-                            for vis_b64 in finetuned_result["visualizations"]:
-                                img_data = base64.b64decode(vis_b64)
-                                img = Image.open(io.BytesIO(img_data))
-                                finetuned_vis_images.append(img)
+                            for j, vis_b64 in enumerate(finetuned_result["visualizations"][:6]):  # Limit to 6 visualizations per image
+                                try:
+                                    img_data = base64.b64decode(vis_b64)
+                                    img = Image.open(io.BytesIO(img_data))
+                                    # Resize image to reduce memory usage
+                                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                                    finetuned_vis_images.append(img)
+                                except Exception as e:
+                                    print(f"Error processing fine-tuned model visualization {j}: {e}")
+                                    continue
                             
                             base_gallery_updates.append(base_vis_images)
                             finetuned_gallery_updates.append(finetuned_vis_images)
@@ -625,25 +779,25 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                             
                             # Create detailed page info for base model
                             base_token_breakdown = []
-                            for rank, token_data in enumerate(base_result.get("token_scores", []), 1):
+                            for rank, token_data in enumerate(base_result.get("token_scores", [])[:5], 1):  # Top 5 tokens only
                                 token = token_data["token"]
                                 sim = token_data["max_similarity"]
                                 base_token_breakdown.append(f"{rank}. **'{token}'** ({sim:.3f})")
                             
                             base_page_info_text = f"""**Top tokens by importance:**
-{chr(10).join(base_token_breakdown[:5])}  
-**Visualizations:** {base_result['num_visualizations']}"""
+{chr(10).join(base_token_breakdown)}  
+**Visualizations:** {len(base_vis_images)} (limited for memory)"""
                             
                             # Create detailed page info for fine-tuned model
                             finetuned_token_breakdown = []
-                            for rank, token_data in enumerate(finetuned_result.get("token_scores", []), 1):
+                            for rank, token_data in enumerate(finetuned_result.get("token_scores", [])[:5], 1):  # Top 5 tokens only
                                 token = token_data["token"]
                                 sim = token_data["max_similarity"]
                                 finetuned_token_breakdown.append(f"{rank}. **'{token}'** ({sim:.3f})")
                             
                             finetuned_page_info_text = f"""**Top tokens by importance:**
-{chr(10).join(finetuned_token_breakdown[:5])}  
-**Visualizations:** {finetuned_result['num_visualizations']}"""
+{chr(10).join(finetuned_token_breakdown)}  
+**Visualizations:** {len(finetuned_vis_images)} (limited for memory)"""
                             
                             base_page_info_updates.append(gr.Markdown(value=base_page_info_text, visible=True))
                             finetuned_page_info_updates.append(gr.Markdown(value=finetuned_page_info_text, visible=True))
@@ -660,11 +814,24 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                         base_page_info_updates.append(gr.Markdown(visible=False))
                         finetuned_page_info_updates.append(gr.Markdown(visible=False))
                 
+                # Clear intermediate results to free memory
+                del base_results, finetuned_results
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
                 # Return: status, base_token_df, finetuned_token_df, base_galleries, finetuned_galleries, rows, base_page_infos, finetuned_page_infos
                 return [status_text] + [base_token_df] + [finetuned_token_df] + base_gallery_updates + finetuned_gallery_updates + row_updates + base_page_info_updates + finetuned_page_info_updates
                 
             except Exception as e:
                 error_msg = f"❌ Error generating model comparison: {str(e)}"
+                print(f"Comparison error: {e}")
+                # Try to restore original model on error
+                try:
+                    if 'original_model' in locals():
+                        load_model(original_model["name"])
+                except:
+                    pass
                 return [error_msg] + [gr.DataFrame(visible=False)] * 2 + [[]] * 20 + [gr.Row(visible=False)] * 10 + [gr.Markdown(visible=False)] * 20
 
         def update_retrieval_results(query, top_k, sequential):
@@ -826,7 +993,14 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                 colpali_response,
                 hybrid_response
             ]
-        )        # ColPali interpretation refresh handler
+        )        # Model switching handler
+        switch_model_button.click(
+            switch_model_handler,
+            inputs=[model_selector],
+            outputs=[comparison_status, current_model_display]
+        )
+
+        # ColPali interpretation refresh handler
         refresh_interpretation_button.click(
             refresh_colpali_interpretation,
             inputs=[retrieved_results, current_query],
