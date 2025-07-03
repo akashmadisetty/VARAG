@@ -89,6 +89,57 @@ This makes it easy to test and experiment with different approaches in real-time
 
 ---
 
+## 🚀 Cloud Deployment with Modal
+
+VARAG provides ready-to-use Modal deployment configurations for running ColPali comparison demos in the cloud with GPU acceleration.
+
+### Available Deployment Options
+
+| **App** | **Description** | **Command** |
+|---------|-----------------|-------------|
+| **comp_v2** | Clean split-screen comparison UI (recommended) | `python -m modal run modal_test.py::compv2` |
+| **comp_demo** | Original comparison app with full features | `python -m modal run modal_test.py::comp_demo` |
+| **start_optimized** | Memory-optimized startup version | `python -m modal run modal_test.py::start_optimized` |
+
+### Prerequisites
+
+1. **Install Modal**: `pip install modal`
+2. **Setup Modal account**: `modal setup`
+3. **Configure secrets**: Set up `hf-wandb-vyoman-secrets` in Modal dashboard with your HuggingFace token
+
+### Quick Deploy
+
+```bash
+# Deploy the recommended clean comparison UI
+python -m modal run modal_test.py::compv2
+
+# Deploy the original full-featured demo
+python -m modal run modal_test.py::comp_demo
+
+# Deploy the memory-optimized version
+python -m modal run modal_test.py::start_optimized
+```
+
+### Features
+
+- **GPU Acceleration**: Automatic L4 GPU provisioning
+- **Model Caching**: Persistent volume for fast model loading
+- **Memory Optimization**: Configured for T4/L4 GPU constraints
+- **Auto-scaling**: Pay-per-use with automatic scaling to zero
+- **Public Access**: Generates shareable Gradio URLs
+
+### Environment Variables
+
+The deployment uses a `.env` file for configuration. Key variables:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here  # Optional
+HF_TOKEN=your_huggingface_token_here     # Set in Modal secrets
+```
+
+---
+
 
 ### How VARAG is structured
 
