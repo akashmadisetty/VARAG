@@ -1,6 +1,8 @@
 import gradio as gr
 import os
 import lancedb
+import torch
+import gc
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 from typing import List
@@ -21,43 +23,7 @@ from varag.utils import get_model_colpali
 import argparse
 from colpali_similarity_v2 import create_similarity_mapper,analyze_multiple_images
 
-# Import memory optimization utilities
-try:
-    from memory_optimizer import (
-        print_memory_status, 
-        clear_memory, 
-        optimize_for_t4_gpu,
-        memory_efficient_inference_settings,
-        check_memory_for_comparison
-    )
-    print("✅ Memory optimizer loaded")
-except ImportError:
-    print("⚠️ Memory optimizer not available - using basic memory management")
-    def print_memory_status(): pass
-    def clear_memory(): 
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    def optimize_for_t4_gpu(): pass
-    def memory_efficient_inference_settings(): pass
-    def check_memory_for_comparison(): return True, "Memory check disabled"
-
-# Import safe model loader
-try:
-    from safe_model_loader import safe_get_model_colpali
-    print("✅ Safe model loader available")
-    use_safe_loader = True
-except ImportError:
-    print("⚠️ Safe model loader not available - using default")
-    use_safe_loader = False
-
 load_dotenv()
-
-# Apply memory optimizations early
-print("🔧 Applying memory optimizations for T4 GPU...")
-optimize_for_t4_gpu()
-memory_efficient_inference_settings()
 
 # Initialize shared database
 shared_db = lancedb.connect("~/rag_demo_db")
@@ -71,10 +37,6 @@ image_embedding_model = SentenceTransformer(
     "jinaai/jina-clip-v1", trust_remote_code=True
 )
 
-# Memory-optimized approach: Only load one model at a time
-import torch
-import gc
-
 # Model configurations
 BASE_MODEL_NAME = "vidore/colpali-v1.3"
 FINETUNED_MODEL_NAME = "akashmadisetty/colpali-merged-model-hi-10k"
@@ -82,49 +44,9 @@ FINETUNED_MODEL_NAME = "akashmadisetty/colpali-merged-model-hi-10k"
 # Currently active model - start with base model for backward compatibility
 current_model_name = BASE_MODEL_NAME
 
-# Load model with correct precision for ColPali
-try:
-    if use_safe_loader:
-        colpali_model, colpali_processor = safe_get_model_colpali(current_model_name)
-    else:
-        colpali_model, colpali_processor = get_model_colpali(current_model_name)
-        
-        # Check current model precision and device
-        current_dtype = next(colpali_model.parameters()).dtype
-        current_device = next(colpali_model.parameters()).device
-        
-        print(f"✅ Model loaded with dtype: {current_dtype}")
-        print(f"✅ Model loaded on device: {current_device}")
-        
-        # Only apply precision optimization if safe to do so
-        if torch.cuda.is_available() and current_device.type == 'cuda':
-            if current_dtype == torch.bfloat16:
-                print(f"✅ Model already optimized with BFloat16")
-            elif current_dtype == torch.float32 and torch.cuda.is_bf16_supported():
-                try:
-                    colpali_model = colpali_model.to(torch.bfloat16)
-                    print(f"✅ Model converted to BFloat16 for memory efficiency")
-                except Exception as precision_error:
-                    print(f"⚠️ BFloat16 conversion failed: {precision_error}")
-                    print(f"✅ Using original precision")
-            else:
-                print(f"✅ Using original model precision")
-        else:
-            print(f"✅ Model loaded with default settings")
-        
-except Exception as e:
-    print(f"❌ Error loading model {current_model_name}: {e}")
-    print("🔄 Trying fallback loading without optimizations...")
-    try:
-        colpali_model, colpali_processor = get_model_colpali(current_model_name)
-        print(f"✅ Model loaded with fallback method")
-    except Exception as fallback_error:
-        print(f"❌ Fallback loading also failed: {fallback_error}")
-        raise
-
+# Load model without optimizations
+colpali_model, colpali_processor = get_model_colpali(current_model_name)
 print(f"✅ ColPali model loaded: {current_model_name}")
-print(f"🔧 Final model device: {next(colpali_model.parameters()).device}")
-print(f"🔧 Final model dtype: {next(colpali_model.parameters()).dtype}")
 
 # Initialize similarity mapper for current model
 try:
@@ -145,7 +67,8 @@ def load_model(model_name):
     
     try:
         print(f"🔄 Switching from {current_model_name} to {model_name}...")
-          # Clear current model from memory
+        
+        # Clear current model from memory
         if 'colpali_model' in globals():
             del colpali_model
         if 'colpali_processor' in globals():
@@ -153,43 +76,14 @@ def load_model(model_name):
         if 'similarity_mapper' in globals():
             del similarity_mapper
         
-        # Force garbage collection and clear CUDA cache
+        # Basic garbage collection
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.synchronize()
         
-        print_memory_status()  # Show memory status before loading        # Load new model
-        if use_safe_loader:
-            colpali_model, colpali_processor = safe_get_model_colpali(model_name)
-        else:
-            colpali_model, colpali_processor = get_model_colpali(model_name)
-            
-            # Apply memory optimizations with safe precision handling
-            try:
-                current_dtype = next(colpali_model.parameters()).dtype
-                current_device = next(colpali_model.parameters()).device
-                
-                print(f"✅ New model loaded with dtype: {current_dtype}")
-                print(f"✅ New model loaded on device: {current_device}")
-                
-                # Only optimize if safe and beneficial
-                if torch.cuda.is_available() and current_device.type == 'cuda':
-                    if current_dtype == torch.bfloat16:
-                        print(f"✅ Model already optimized with BFloat16")
-                    elif current_dtype == torch.float32 and torch.cuda.is_bf16_supported():
-                        try:
-                            colpali_model = colpali_model.to(torch.bfloat16)
-                            print(f"✅ Model converted to BFloat16")
-                        except Exception as precision_error:
-                            print(f"⚠️ BFloat16 conversion failed: {precision_error}")
-                            print(f"✅ Using original precision")
-                    else:
-                        print(f"✅ Using original model precision")
-                
-            except Exception as precision_error:
-                print(f"⚠️ Could not optimize precision: {precision_error}")
-                print(f"✅ Model loaded with default settings")
+        # Load new model without optimizations
+        colpali_model, colpali_processor = get_model_colpali(model_name)
+        print(f"✅ New model loaded: {model_name}")
         
         # Create new similarity mapper
         similarity_mapper = create_similarity_mapper(colpali_model, colpali_processor)
@@ -473,6 +367,62 @@ def change_table(simple_table, vision_table, colpali_table, hybrid_table):
     return "Table names updated successfully."
 
 
+def get_query_token_breakdown(query):
+    """
+    Analyze query tokens using the ColPali processor to show how the query is tokenized.
+    Returns a formatted markdown string showing the token breakdown.
+    """
+    if not query or not query.strip():
+        return "**Token Analysis:** No query provided"
+    
+    try:
+        # Use the current ColPali processor to tokenize the query
+        if colpali_processor:
+            # Tokenize the query (similar to how ColPali does it internally)
+            inputs = colpali_processor.process_queries([query])
+            
+            # Get tokens from the processor
+            if hasattr(colpali_processor, 'tokenizer'):
+                tokens = colpali_processor.tokenizer.tokenize(query)
+                token_ids = colpali_processor.tokenizer.encode(query, add_special_tokens=False)
+                
+                # Create a nice breakdown
+                breakdown_text = f"""**🔍 Query Token Breakdown**
+
+**Original Query:** `{query}`
+
+**Number of Tokens:** {len(tokens)} tokens
+
+**Token Details:**
+"""
+                
+                for i, (token, token_id) in enumerate(zip(tokens, token_ids), 1):
+                    # Clean up token representation for display
+                    display_token = token.replace('▁', ' ').strip()
+                    if display_token.startswith(' '):
+                        display_token = f"[SPACE]{display_token}"
+                    breakdown_text += f"- **{i}.** `{display_token}` (ID: {token_id})\n"
+                
+                breakdown_text += f"""
+**💡 Understanding Tokens:**
+- ColPali analyzes each token separately to understand query intent
+- More tokens = more detailed similarity maps generated  
+- Special tokens like `▁` represent word boundaries
+- Each token gets its own attention visualization
+"""
+                
+                print(f"🔤 Query tokenized into {len(tokens)} tokens: {tokens}")
+                return breakdown_text
+            else:
+                return f"**Token Analysis:** Query tokenization not available (no tokenizer found)"
+                
+    except Exception as e:
+        print(f"❌ Error in token breakdown: {e}")
+        return f"**Token Analysis:** Error analyzing query tokens: {str(e)}"
+    
+    return f"**Token Analysis:** Could not analyze tokens for query: `{query}`"
+
+
 def gradio_interface():
     with gr.Blocks(
         theme=gr.themes.Monochrome(radius_size=gr.themes.sizes.radius_none)
@@ -559,19 +509,25 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                         lines=3
                     )
                     
+                    # Token breakdown display
+                    token_breakdown_display = gr.Markdown(
+                        label="Query Token Breakdown",
+                        value="**Token Analysis:** No query tokenized yet",
+                        visible=True
+                    )
+                    
                     # Model selection and management
                     with gr.Row():
                         current_model_display = gr.Textbox(
                             label="Currently Loaded Model",
                             value=current_model_name,
                             interactive=False
-                        )
-                    
+                        )                    
                     with gr.Row():
                         model_selector = gr.Dropdown(
                             choices=[BASE_MODEL_NAME, FINETUNED_MODEL_NAME],
                             value=current_model_name,
-                            label="Switch Model (for memory efficiency)",
+                            label="Switch Model",
                             interactive=True
                         )
                         switch_model_button = gr.Button("🔄 Switch Model", variant="secondary", size="sm")
@@ -678,7 +634,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         current_query = gr.State("")
 
         def switch_model_handler(selected_model):
-            """Handle model switching with memory management"""
+            """Handle model switching"""
             try:
                 if load_model(selected_model):
                     return f"✅ Successfully switched to: {selected_model}", selected_model
@@ -690,24 +646,17 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         def refresh_colpali_interpretation(retrieved_results, current_query):
             """Refresh the ColPali interpretation with current query and results"""
             if not retrieved_results or "ColpaliRAG" not in retrieved_results:
-                return "No ColPali results available - perform a retrieval first", []
+                return "No ColPali results available - perform a retrieval first", [], "**Token Analysis:** No query yet"
             
             if not current_query:
-                return "No query available", []
+                return "No query available", [], "**Token Analysis:** No query available"
             
             colpali_images = retrieved_results.get("ColpaliRAG", [])
             
-            return current_query, colpali_images
-            """Refresh the ColPali interpretation with current query and results"""
-            if not retrieved_results or "ColpaliRAG" not in retrieved_results:
-                return "No ColPali results available - perform a retrieval first", []
+            # Get token breakdown for the current query
+            token_breakdown = get_query_token_breakdown(current_query)
             
-            if not current_query:
-                return "No query available", []
-            
-            colpali_images = retrieved_results.get("ColpaliRAG", [])
-            
-            return current_query, colpali_images
+            return current_query, colpali_images, token_breakdown
 
         def generate_model_comparison_for_images(retrieved_results, current_query):
             """Generate and compare similarity maps for both base and fine-tuned ColPali models"""
@@ -727,8 +676,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
             
             # Update status
             status_text = f"🔄 Comparing models on {len(colpali_images)} images for query: '{current_query}'..."
-            
-            # Generate similarity maps for both models sequentially to save memory
+              # Generate similarity maps for both models
             try:
                 # Store current model info
                 original_model = get_current_model_info()
@@ -782,9 +730,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
 **💡 How to compare:** 
 - Look at token similarity scores in the tables below
 - Compare attention patterns in the side-by-side galleries
-- Higher similarity scores indicate stronger model focus on that token
-
-**🔧 Memory Optimization:** Models are loaded sequentially to fit in T4 GPU memory"""
+- Higher similarity scores indicate stronger model focus on that token"""
                 
                 # Create token analysis DataFrames
                 base_token_df = gr.DataFrame(
@@ -796,33 +742,29 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                 finetuned_token_df = gr.DataFrame(
                     value=finetuned_token_analysis_data,
                     headers=["Token", "Max Similarity", "Rank"],
-                    visible=True
-                )
+                    visible=True                )
                 
-                # Prepare outputs for galleries with memory-efficient processing
+                # Prepare outputs for galleries
                 base_gallery_updates = []
                 finetuned_gallery_updates = []
                 row_updates = []
                 base_page_info_updates = []
                 finetuned_page_info_updates = []
                 
-                # Process images in smaller batches to avoid memory issues
-                max_images = min(len(base_results), len(finetuned_results), 5)  # Limit to 5 images to save memory
+                # Process images
+                max_images = min(len(base_results), len(finetuned_results), 10)
                 
                 for i in range(10):  # Still support up to 10 galleries in UI
                     if i < max_images:
                         base_result = base_results[i]
                         finetuned_result = finetuned_results[i]
-                        
                         if base_result["success"] and finetuned_result["success"]:
                             # Convert base64 visualizations to images for base model
                             base_vis_images = []
-                            for j, vis_b64 in enumerate(base_result["visualizations"][:6]):  # Limit to 6 visualizations per image
+                            for j, vis_b64 in enumerate(base_result["visualizations"]):
                                 try:
                                     img_data = base64.b64decode(vis_b64)
                                     img = Image.open(io.BytesIO(img_data))
-                                    # Resize image to reduce memory usage
-                                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
                                     base_vis_images.append(img)
                                 except Exception as e:
                                     print(f"Error processing base model visualization {j}: {e}")
@@ -830,12 +772,10 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                             
                             # Convert base64 visualizations to images for fine-tuned model
                             finetuned_vis_images = []
-                            for j, vis_b64 in enumerate(finetuned_result["visualizations"][:6]):  # Limit to 6 visualizations per image
+                            for j, vis_b64 in enumerate(finetuned_result["visualizations"]):
                                 try:
                                     img_data = base64.b64decode(vis_b64)
                                     img = Image.open(io.BytesIO(img_data))
-                                    # Resize image to reduce memory usage
-                                    img.thumbnail((400, 400), Image.Resampling.LANCZOS)
                                     finetuned_vis_images.append(img)
                                 except Exception as e:
                                     print(f"Error processing fine-tuned model visualization {j}: {e}")
@@ -847,25 +787,25 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                             
                             # Create detailed page info for base model
                             base_token_breakdown = []
-                            for rank, token_data in enumerate(base_result.get("token_scores", [])[:5], 1):  # Top 5 tokens only
+                            for rank, token_data in enumerate(base_result.get("token_scores", [])[:10], 1):  # Top 10 tokens
                                 token = token_data["token"]
                                 sim = token_data["max_similarity"]
                                 base_token_breakdown.append(f"{rank}. **'{token}'** ({sim:.3f})")
                             
                             base_page_info_text = f"""**Top tokens by importance:**
 {chr(10).join(base_token_breakdown)}  
-**Visualizations:** {len(base_vis_images)} (limited for memory)"""
+**Visualizations:** {len(base_vis_images)}"""
                             
                             # Create detailed page info for fine-tuned model
                             finetuned_token_breakdown = []
-                            for rank, token_data in enumerate(finetuned_result.get("token_scores", [])[:5], 1):  # Top 5 tokens only
+                            for rank, token_data in enumerate(finetuned_result.get("token_scores", [])[:10], 1):  # Top 10 tokens
                                 token = token_data["token"]
                                 sim = token_data["max_similarity"]
                                 finetuned_token_breakdown.append(f"{rank}. **'{token}'** ({sim:.3f})")
                             
                             finetuned_page_info_text = f"""**Top tokens by importance:**
 {chr(10).join(finetuned_token_breakdown)}  
-**Visualizations:** {len(finetuned_vis_images)} (limited for memory)"""
+**Visualizations:** {len(finetuned_vis_images)}"""
                             
                             base_page_info_updates.append(gr.Markdown(value=base_page_info_text, visible=True))
                             finetuned_page_info_updates.append(gr.Markdown(value=finetuned_page_info_text, visible=True))
@@ -881,14 +821,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                         row_updates.append(gr.Row(visible=False))
                         base_page_info_updates.append(gr.Markdown(visible=False))
                         finetuned_page_info_updates.append(gr.Markdown(visible=False))
-                
-                # Clear intermediate results to free memory
-                del base_results, finetuned_results
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                
-                # Return: status, base_token_df, finetuned_token_df, base_galleries, finetuned_galleries, rows, base_page_infos, finetuned_page_infos
+                  # Return: status, base_token_df, finetuned_token_df, base_galleries, finetuned_galleries, rows, base_page_infos, finetuned_page_infos
                 return [status_text] + [base_token_df] + [finetuned_token_df] + base_gallery_updates + finetuned_gallery_updates + row_updates + base_page_info_updates + finetuned_page_info_updates
                 
             except Exception as e:
@@ -1065,14 +998,16 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         switch_model_button.click(
             switch_model_handler,
             inputs=[model_selector],
-            outputs=[comparison_status, current_model_display]
-        )
-
+            outputs=[comparison_status, current_model_display]        )
+        
         # ColPali interpretation refresh handler
         refresh_interpretation_button.click(
             refresh_colpali_interpretation,
             inputs=[retrieved_results, current_query],
-            outputs=[current_query_display, colpali_interpretation_gallery]        )        # Model comparison generation handler
+            outputs=[current_query_display, colpali_interpretation_gallery, token_breakdown_display]
+        )
+        
+        # Model comparison generation handler
         generate_comparison_button.click(
             generate_model_comparison_for_images,
             inputs=[retrieved_results, current_query],
@@ -1102,14 +1037,7 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                 colpali_table_input,
                 hybrid_table_input,
             ],
-            outputs=table_update_status,
-        )
-
-        refresh_interpretation_button.click(
-            refresh_colpali_interpretation,
-            inputs=[retrieved_results, current_query],
-            outputs=[current_query_display, colpali_interpretation_gallery],
-        )
+            outputs=table_update_status,        )
 
     return demo
 
