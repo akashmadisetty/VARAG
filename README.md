@@ -78,7 +78,7 @@ pip install -e .["ocr"]
 
 Explore VARAG with our interactive playground! It lets you seamlessly compare various RAG (Retrieval-Augmented Generation) solutions, from data ingestion to retrieval.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adithya-s-k/VARAG/blob/main/docs/demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/akashmadisetty/VARAG/blob/main/docs/demo.ipynb)
 
 You can run it locally or on Google Colab:
 ```bash
@@ -97,27 +97,19 @@ VARAG provides ready-to-use Modal deployment configurations for running ColPali 
 
 | **App** | **Description** | **Command** |
 |---------|-----------------|-------------|
-| **comp_v2** | Clean split-screen comparison UI (recommended) | `python -m modal run modal_test.py::compv2` |
-| **comp_demo** | Original comparison app with full features | `python -m modal run modal_test.py::comp_demo` |
-| **start_optimized** | Memory-optimized startup version | `python -m modal run modal_test.py::start_optimized` |
+| **modal_demo_heatmaps_comparing_colpali_models** | ColPali model comparison with heatmaps and similarity analysis on Modal GPU | `python -m modal run examples/inference_colpali/modal_demo_heatmaps_comparing_colpali_models.py::comparision_demo` |
 
 ### Prerequisites
 
 1. **Install Modal**: `pip install modal`
 2. **Setup Modal account**: `modal setup`
-3. **Configure secrets**: Set up `hf-wandb-vyoman-secrets` in Modal dashboard with your HuggingFace token
+3. **Configure secrets**: Set up `hf-secret` in Modal dashboard with your HuggingFace token
 
 ### Quick Deploy
 
 ```bash
-# Deploy the recommended clean comparison UI
-python -m modal run modal_test.py::compv2
-
-# Deploy the original full-featured demo
-python -m modal run modal_test.py::comp_demo
-
-# Deploy the memory-optimized version
-python -m modal run modal_test.py::start_optimized
+# Deploy the ColPali model comparison demo with heatmaps
+python -m modal run examples/inference_colpali/modal_demo_heatmaps_comparing_colpali_models.py::comparision_demo
 ```
 
 ### Features
@@ -182,12 +174,35 @@ This paradigm is inspired by the [Byaldi](https://github.com/AnswerDotAI/byaldi)
 
 ---
 
+
+## 🔍 ColPali Interpretability
+
+VARAG includes advanced interpretability features for ColPali models, allowing you to visualize how the model processes and understands document queries at the token level.
+
+### Local Interpretability Demo
+
+In the `examples/inference_colpali/` folder, you'll find `demo_with_heatmaps.py` which demonstrates:
+
+- **Token-level Analysis**: See how each query token contributes to document retrieval
+- **Similarity Heatmaps**: Visual representation of attention patterns across document pages  
+- **Model Comparison**: Side-by-side analysis of different ColPali model variants
+- **Interactive Gradio Interface**: Easy-to-use web interface for exploration
+
+**Run locally:**
+```bash
+python examples/inference_colpali/demo_with_heatmaps.py
+```
+
+This script provides deep insights into ColPali's decision-making process, helping you understand why certain documents are retrieved for specific queries and how different tokens influence the retrieval scores.
+
+---
 ### Explanation:
 
 - **Technique**: This column lists the different techniques implemented for Retrieval-Augmented Generation (RAG).
 - **Notebook**: Colab links with the "Open In Colab" button for interactive exploration of each technique.
 - **Demo**: Links to the corresponding demo scripts in the repository that can be executed locally.
 
+---
 
 ## 🛠️ Contributing
 
