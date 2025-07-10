@@ -65,7 +65,7 @@ inference_image = (
     .env({
         "HF_HUB_CACHE": HF_CACHE_PATH, 
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
-        "GEMINI_API_KEY":"AIzaSyDT2XwygpeaLwT1qtNfjoCQrOzoeK_4Q2E",
+        "GEMINI_API_KEY":"INSERT_API_KEY_HERE", 
     })
 )
 
