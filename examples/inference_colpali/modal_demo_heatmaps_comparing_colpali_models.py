@@ -1,27 +1,3 @@
-"""
-Modal deployment configuration for ColPali comparison apps.
-
-This module provides four different entrypoints for deploying ColPali comparison UIs:
-
-1. comparision_demo() - Original comparison app with full feature set (optimized for T4/L4)
-2. comparision_demo_original() - UNOPTIMIZED original app with both models loaded (no constraints)
-
-
-Usage:
-    # Deploy the UNOPTIMIZED original demo (both models loaded, no constraints)
-    python -m modal run modal_demo_heatmaps_comparing_colpali_models.py::comparision_demo_original
-    
-    # Deploy the optimized comparison app (for T4/L4)
-    python -m modal run modal_demo_heatmaps_comparing_colpali_models.py::comparision_demo
-
-
-Each function will:
-- Set up the required environment with CUDA support
-- Mount the persistent volume for model caching
-- Launch a Gradio app accessible via a public URL
-- Handle memory optimization for T4/L4 GPUs (except comparision_demo_original)
-"""
-
 import modal
 from pydantic import BaseModel
 from typing import List, Optional
@@ -45,7 +21,7 @@ MODEL_PATH = f"{VOLUME_PATH}/models"
 # Docker image with all dependencies
 inference_image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
-   .apt_install("git")
+    .apt_install("git")
     .run_commands([
         "git clone https://github.com/akashmadisetty/VARAG",
         "cd VARAG && pip install -e ."
@@ -62,17 +38,17 @@ inference_image = (
         "huggingface_hub[hf-transfer]",
         "gradio",
     )
+    .run_commands(["ls -al",])
     .env({
         "HF_HUB_CACHE": HF_CACHE_PATH, 
         "HF_HUB_ENABLE_HF_TRANSFER": "1",
-        "GEMINI_API_KEY":"INSERT_API_KEY_HERE", 
+        "GEMINI_API_KEY":"INSERT_API_KEY_HERE",
     })
-)
 
-# Function for comparision_demo.py - Original comparison app
+)
 @app.function(
     image=inference_image,
-    gpu="L4",
+    gpu="L4",  # Use powerful GPU for unoptimized version
     timeout=7200,  # 2 hour timeout
     volumes={
         VOLUME_PATH: col_vol,
@@ -80,75 +56,6 @@ inference_image = (
     secrets=[modal.Secret.from_name("hf-wandb-vyoman-secrets")]  # For HF token
 )
 def comparision_demo():
-    import sys
-    import os
-    
-    # Setup environment and paths
-    os.environ["HF_HUB_CACHE"] = HF_CACHE_PATH
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-    
-    # Change to VARAG directory
-    varag_path = "/root/VARAG"
-    if os.path.exists(varag_path):
-        sys.path.insert(0, varag_path)
-        os.chdir(varag_path)
-    
-    # Import after path setup
-    try:
-        # Try importing from the current directory or relative path (in container)
-        import sys
-        import importlib.util
-        
-        # Try several possible locations
-        possible_paths = [
-            os.path.join(os.getcwd(), "examples/inference_colpali/comparision_demo.py"),
-            os.path.join(os.getcwd(), "comparision_demo.py"),
-            os.path.join(os.path.dirname(__file__), "comparision_demo.py")
-        ]
-        
-        module_loaded = False
-        for path in possible_paths:
-            if os.path.exists(path):
-                print(f"Loading comparision_demo from: {path}")
-                spec = importlib.util.spec_from_file_location("comparision_demo", path)
-                comparision_demo = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(comparision_demo)
-                module_loaded = True
-                break
-                
-        if not module_loaded:
-            print("Fallback to direct import")
-            import comparision_demo
-    except Exception as e:
-        print(f"Error importing comparision_demo: {e}")
-        print("Attempting to locate the file:")
-        os.system("find /root -name 'comparision_demo.py'")
-        raise
-    
-    import gradio as gr
-
-    print(f"🚀 Starting comparision_demo with models:")
-    print(f"   Base: vidore/colpali-v1.3")
-    print(f"   Fine-tuned: akashmadisetty/colpali-merged-model-hi-10k")
-    print(f"   Cache: {HF_CACHE_PATH}")    # Initialize the Gradio interface
-    app = comparision_demo.gradio_interface()
-
-    app.launch(server_name="0.0.0.0", server_port=7860, share=True)
-    
-    return {"status": "comparision_demo app launched successfully"}
-
-
-# Function for comparision_demo_original - UNOPTIMIZED original app with both models
-@app.function(
-    image=inference_image,
-    gpu="A100",  # Use powerful GPU for unoptimized version
-    timeout=7200,  # 2 hour timeout
-    volumes={
-        VOLUME_PATH: col_vol,
-    },
-    secrets=[modal.Secret.from_name("hf-wandb-vyoman-secrets")]  # For HF token
-)
-def comparision_demo_original():
     import sys
     import os
     import time
@@ -168,6 +75,7 @@ def comparision_demo_original():
     os.environ["HF_HUB_CACHE"] = HF_CACHE_PATH
     # Remove all memory constraints - no PYTORCH_CUDA_ALLOC_CONF
     
+    
     # Change to VARAG directory
     varag_path = "/root/VARAG"
     if os.path.exists(varag_path):
@@ -185,7 +93,8 @@ def comparision_demo_original():
     from varag.utils import get_model_colpali,create_similarity_mapper, analyze_multiple_images
     import lancedb
     
-    load_dotenv()
+
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
     
     print(f"🚀 Starting UNOPTIMIZED ColPali Comparison App")
     print(f"💾 Cache: {HF_CACHE_PATH}")
@@ -255,8 +164,6 @@ def comparision_demo_original():
         table_name="originalHybridDemo",
     )
     
-    # Initialize VLM and LLM
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
     
     if gemini_api_key:
         gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
@@ -912,8 +819,7 @@ def comparision_demo_original():
             outputs=[table_update_status]
         )
     
-    print("🎉 Original unoptimized interface ready!")
+    print("🎉 Interface ready!")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
     
-    return {"status": "comparision_demo_original app launched successfully"}
-
+    
