@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from pathlib import Path
 import os
+import base64
+import io
 
 app = modal.App("colpali-finetuning")
 
@@ -37,6 +39,8 @@ inference_image = (
     .pip_install(
         "huggingface_hub[hf-transfer]",
         "gradio",
+        "matplotlib",
+        "scipy",
     )
     .run_commands(["ls -al",])
     .env({
@@ -70,6 +74,8 @@ def comparision_demo():
     from collections import namedtuple
     from dotenv import load_dotenv
     from typing import List, Dict, Any
+    import matplotlib.pyplot as plt
+    import numpy as np
     
     # Setup environment - NO optimizations
     os.environ["HF_HUB_CACHE"] = HF_CACHE_PATH
@@ -96,9 +102,9 @@ def comparision_demo():
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     
-    print(f"🚀 Starting UNOPTIMIZED ColPali Comparison App")
+    print(f"🚀 Starting ColPali Comparison App")
     print(f"💾 Cache: {HF_CACHE_PATH}")
-    print(f"🔥 Loading both models simultaneously (no constraints)")
+    print(f"🔥 Loading both models")
     print("=" * 60)
     
     # Use local temporary database to avoid permission conflicts with persistent volume
@@ -166,7 +172,7 @@ def comparision_demo():
     
     
     if gemini_api_key:
-        gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
+        gemini_model = "gemini/gemini-2.5-flash"
         gem_llm = LiteLLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
         gem_vlm = LiteLLMVLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
         llm = gem_llm
@@ -320,80 +326,403 @@ def comparision_demo():
         
         return results, timings
     
-    def query_data(query, retrieved_results):
-        """Query all RAG systems with VLM"""
-        results = {}
-        
-        # SimpleRAG
-        simple_context = retrieved_results["SimpleRAG"]
-        simple_response = llm.query(
-            context=simple_context,
-            system_prompt="Given the below information answer the questions",
-            query=query,
-        )
-        results["SimpleRAG"] = {"response": simple_response, "context": simple_context}
-        
-        # VisionRAG
-        vision_images = retrieved_results["VisionRAG"]
-        vision_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
-            [f"Image {i+1}" for i in range(len(vision_images))]
-        )
-        vision_response = vlm.query(vision_context, vision_images, max_tokens=500)
-        results["VisionRAG"] = {
-            "response": vision_response,
-            "context": vision_context,
-            "images": vision_images,
-        }
-        
-        # ColpaliRAG
-        colpali_images = retrieved_results["ColpaliRAG"]
-        colpali_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
-            [f"Image {i+1}" for i in range(len(colpali_images))]
-        )
-        colpali_response = vlm.query(colpali_context, colpali_images, max_tokens=500)
-        results["ColpaliRAG"] = {
-            "response": colpali_response,
-            "context": colpali_context,
-            "images": colpali_images,
-        }
-          # HybridColpaliRAG
-        hybrid_images = retrieved_results["HybridColpaliRAG"]
-        hybrid_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
-            [f"Image {i+1}" for i in range(len(hybrid_images))]
-        )
-        hybrid_response = vlm.query(hybrid_context, hybrid_images, max_tokens=500)
-        results["HybridColpaliRAG"] = {
-            "response": hybrid_response,
-            "context": hybrid_context,
-            "images": hybrid_images,
-        }
-        
-        return results
+    def query_data_single(query, retrieved_results, model_name):
+        """Helper function to query a single RAG model with error handling"""
+        try:
+            if model_name == "SimpleRAG":
+                print(f"🔄 Querying {model_name}...")
+                simple_context = retrieved_results["SimpleRAG"]
+                simple_response = llm.query(
+                    context=simple_context,
+                    system_prompt="Given the below information answer the questions",
+                    query=query,
+                )
+                print(f"✅ {model_name} completed")
+                return {"response": simple_response, "context": simple_context}
+            
+            elif model_name == "VisionRAG":
+                print(f"🔄 Querying {model_name}...")
+                vision_images = retrieved_results["VisionRAG"]
+                vision_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(vision_images))]
+                )
+                vision_response = vlm.query(vision_context, vision_images, max_tokens=500)
+                print(f"✅ {model_name} completed")
+                return {
+                    "response": vision_response,
+                    "context": vision_context,
+                    "images": vision_images,
+                }
+            
+            elif model_name == "ColpaliRAG":
+                print(f"🔄 Querying {model_name}...")
+                colpali_images = retrieved_results["ColpaliRAG"]
+                colpali_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(colpali_images))]
+                )
+                colpali_response = vlm.query(colpali_context, colpali_images, max_tokens=500)
+                print(f"✅ {model_name} completed")
+                return {
+                    "response": colpali_response,
+                    "context": colpali_context,
+                    "images": colpali_images,
+                }
+            
+            elif model_name == "HybridColpaliRAG":
+                print(f"🔄 Querying {model_name}...")
+                hybrid_images = retrieved_results["HybridColpaliRAG"]
+                hybrid_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(hybrid_images))]
+                )
+                hybrid_response = vlm.query(hybrid_context, hybrid_images, max_tokens=500)
+                print(f"✅ {model_name} completed")
+                return {
+                    "response": hybrid_response,
+                    "context": hybrid_context,
+                    "images": hybrid_images,
+                }
+            
+            return {"response": f"❌ Model {model_name} not recognized", "context": ""}
+            
+        except Exception as e:
+            error_msg = f"❌ Error in {model_name}: {str(e)}"
+            print(error_msg)
+            return {"response": error_msg, "context": ""}
     
+    def query_data(query, retrieved_results):
+        """Query all RAG systems with rate limiting and progressive updates"""
+        if not retrieved_results:
+            return "❌ No retrieval results", "❌ No retrieval results", "❌ No retrieval results", "❌ No retrieval results"
+        
+        # Initialize empty responses
+        responses = {
+            "SimpleRAG": {"response": "🔄 Waiting to process..."},
+            "VisionRAG": {"response": "🔄 Waiting to process..."},
+            "ColpaliRAG": {"response": "🔄 Waiting to process..."},
+            "HybridColpaliRAG": {"response": "🔄 Waiting to process..."}
+        }
+        
+        # Process SimpleRAG first
+        responses["SimpleRAG"]["response"] = "🔄 Processing SimpleRAG..."
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        responses["SimpleRAG"] = query_data_single(query, retrieved_results, "SimpleRAG")
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        # Wait to avoid rate limit
+        print("⏱️ Waiting 30 seconds before VisionRAG...")
+        time.sleep(30)
+        
+        # Process VisionRAG
+        responses["VisionRAG"]["response"] = "🔄 Processing VisionRAG..."
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        responses["VisionRAG"] = query_data_single(query, retrieved_results, "VisionRAG")
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        # Wait to avoid rate limit
+        print("⏱️ Waiting 30 seconds before ColpaliRAG...")
+        time.sleep(30)
+        
+        # Process ColpaliRAG
+        responses["ColpaliRAG"]["response"] = "🔄 Processing ColpaliRAG..."
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        responses["ColpaliRAG"] = query_data_single(query, retrieved_results, "ColpaliRAG")
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        # Wait longer before final processing
+        print("⏱️ Waiting 60 seconds before HybridColpaliRAG...")
+        time.sleep(60)
+        
+        # Process HybridColpaliRAG
+        responses["HybridColpaliRAG"]["response"] = "🔄 Processing HybridColpaliRAG..."
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        responses["HybridColpaliRAG"] = query_data_single(query, retrieved_results, "HybridColpaliRAG")
+        yield (
+            responses["SimpleRAG"]["response"],
+            responses["VisionRAG"]["response"],
+            responses["ColpaliRAG"]["response"],
+            responses["HybridColpaliRAG"]["response"],
+        )
+        
+        print("✅ All RAG queries completed successfully!")
+
     def base64_to_pil(base64_str: str) -> Image.Image:
         """Convert base64 string to PIL Image"""
         return Image.open(io.BytesIO(base64.b64decode(base64_str)))
     
+    class AggregatedHeatmapGenerator:
+        """
+        Generates aggregated heatmaps by averaging similarity scores across all query tokens.
+        """
+        
+        def __init__(self, model, processor, device=None):
+            from colpali_engine.utils.torch_utils import get_torch_device
+            self.model = model
+            self.processor = processor
+            self.device = device or get_torch_device("auto")
+            
+        def generate_aggregated_similarity_map(self, image: Image.Image, query: str):
+            """Generate aggregated similarity map by averaging across all query tokens."""
+            try:
+                from colpali_engine.interpretability import get_similarity_maps_from_embeddings
+                from colpali_engine.utils.torch_utils import get_torch_device
+                
+                # Preprocess inputs
+                batch_images = self.processor.process_images([image]).to(self.device)
+                batch_queries = self.processor.process_queries([query]).to(self.device)
+                
+                # Forward passes
+                with torch.no_grad():
+                    image_embeddings = self.model.forward(**batch_images)
+                    query_embeddings = self.model.forward(**batch_queries)
+                
+                # Convert embeddings to float32 to avoid BFloat16 issues
+                if image_embeddings.dtype == torch.bfloat16:
+                    image_embeddings = image_embeddings.float()
+                if query_embeddings.dtype == torch.bfloat16:
+                    query_embeddings = query_embeddings.float()
+                
+                # Get image patch information
+                n_patches = self.processor.get_n_patches(image_size=image.size, patch_size=self.model.patch_size)
+                image_mask = self.processor.get_image_mask(batch_images)
+                
+                # Generate similarity maps for all tokens
+                batched_similarity_maps = get_similarity_maps_from_embeddings(
+                    image_embeddings=image_embeddings,
+                    query_embeddings=query_embeddings,
+                    n_patches=n_patches,
+                    image_mask=image_mask,
+                )
+                
+                # Get similarity map for our input image: (query_length, n_patches_x, n_patches_y)
+                similarity_maps = batched_similarity_maps[0]
+                
+                # Ensure similarity maps are in float32
+                if similarity_maps.dtype == torch.bfloat16:
+                    similarity_maps = similarity_maps.float()
+                
+                # Get query tokens for reference
+                query_tokens = self.processor.tokenizer.tokenize(query)
+                
+                # Aggregate across all tokens (average)
+                aggregated_map = torch.mean(similarity_maps, dim=0)
+                
+                # Convert to numpy with explicit float32
+                aggregated_map_np = aggregated_map.cpu().numpy().astype('float32')
+                
+                metadata = {
+                    "query": query,
+                    "query_tokens": query_tokens,
+                    "num_tokens": len(query_tokens),
+                    "min_score": float(aggregated_map_np.min()),
+                    "max_score": float(aggregated_map_np.max()),
+                    "mean_score": float(aggregated_map_np.mean()),
+                }
+                
+                return aggregated_map_np, metadata
+                
+            except Exception as e:
+                print(f"❌ Error generating aggregated similarity map: {e}")
+                return None, {"error": str(e)}
+    
+        def create_aggregated_heatmap_visualization(self, image: Image.Image, aggregated_map, metadata):
+            """Create visualization of aggregated heatmap."""
+            try:
+                import matplotlib.pyplot as plt
+                from scipy.ndimage import zoom
+                
+                fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+                
+                # Original image
+                ax1.imshow(image)
+                ax1.set_title("Original Image", fontweight='bold')
+                ax1.axis('off')
+                
+                # Pure heatmap
+                im2 = ax2.imshow(aggregated_map, cmap="Blues", interpolation='bilinear')
+                ax2.set_title(f"Aggregated Heatmap\n({metadata['num_tokens']} tokens)", fontweight='bold')
+                ax2.axis('off')
+                plt.colorbar(im2, ax=ax2, shrink=0.8)
+                
+                # Overlay
+                ax3.imshow(image)
+                scale_x = image.size[0] / aggregated_map.shape[1]
+                scale_y = image.size[1] / aggregated_map.shape[0]
+                heatmap_resized = zoom(aggregated_map, (scale_y, scale_x), order=1)
+                ax3.imshow(heatmap_resized, cmap="Blues", alpha=0.6, 
+                          extent=[0, image.size[0], image.size[1], 0])
+                ax3.set_title("Overlay", fontweight='bold')
+                ax3.axis('off')
+                
+                plt.tight_layout()
+                
+                # Convert to PIL Image instead of base64
+                buffer = io.BytesIO()
+                plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+                buffer.seek(0)
+                result_image = Image.open(buffer).copy()  # Make a copy to avoid buffer issues
+                plt.close()
+                
+                return result_image
+                
+            except Exception as e:
+                print(f"❌ Error creating visualization: {e}")
+                return None
+
+    def create_aggregated_comparison_heatmaps(base_generator, finetuned_generator, image, query):
+        """Create side-by-side comparison of aggregated heatmaps."""
+        try:
+            import matplotlib.pyplot as plt
+            from scipy.ndimage import zoom
+            
+            # Generate heatmaps for both models
+            base_map, base_meta = base_generator.generate_aggregated_similarity_map(image, query)
+            finetuned_map, finetuned_meta = finetuned_generator.generate_aggregated_similarity_map(image, query)
+            
+            if base_map is None or finetuned_map is None:
+                print("❌ Failed to generate aggregated heatmaps")
+                return None
+            
+            # Create comparison visualization
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            
+            # Row 1: Base Model
+            axes[0,0].imshow(image)
+            axes[0,0].set_title("Original Image", fontweight='bold')
+            axes[0,0].axis('off')
+            
+            im1 = axes[0,1].imshow(base_map, cmap="Blues", interpolation='bilinear')
+            axes[0,1].set_title(f"Base Model Heatmap\nMean: {base_meta['mean_score']:.4f}", fontweight='bold')
+            axes[0,1].axis('off')
+            plt.colorbar(im1, ax=axes[0,1], shrink=0.8)
+            
+            axes[0,2].imshow(image)
+            scale_x = image.size[0] / base_map.shape[1]
+            scale_y = image.size[1] / base_map.shape[0]
+            base_resized = zoom(base_map, (scale_y, scale_x), order=1)
+            axes[0,2].imshow(base_resized, cmap="Blues", alpha=0.6, 
+                            extent=[0, image.size[0], image.size[1], 0])
+            axes[0,2].set_title("Base Model Overlay", fontweight='bold')
+            axes[0,2].axis('off')
+            
+            # Row 2: Fine-tuned Model
+            axes[1,0].imshow(image)
+            axes[1,0].set_title("Original Image", fontweight='bold')
+            axes[1,0].axis('off')
+            
+            im2 = axes[1,1].imshow(finetuned_map, cmap="Blues", interpolation='bilinear')
+            axes[1,1].set_title(f"Fine-tuned Model Heatmap\nMean: {finetuned_meta['mean_score']:.4f}", fontweight='bold')
+            axes[1,1].axis('off')
+            plt.colorbar(im2, ax=axes[1,1], shrink=0.8)
+            
+            axes[1,2].imshow(image)
+            finetuned_resized = zoom(finetuned_map, (scale_y, scale_x), order=1)
+            axes[1,2].imshow(finetuned_resized, cmap="Blues", alpha=0.6,
+                            extent=[0, image.size[0], image.size[1], 0])
+            axes[1,2].set_title("Fine-tuned Model Overlay", fontweight='bold')
+            axes[1,2].axis('off')
+            
+            plt.suptitle(f'ColPali Model Comparison: "{query}"', fontsize=16, fontweight='bold')
+            plt.tight_layout()
+            
+            # Convert to PIL Image
+            buffer = io.BytesIO()
+            plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            buffer.seek(0)
+            result_image = Image.open(buffer).copy()
+            plt.close()
+            
+            return result_image, base_meta, finetuned_meta
+            
+        except Exception as e:
+            print(f"❌ Error creating aggregated comparison: {e}")
+            return None, None, None
+
     def compare_colpali_models(query, colpali_images):
-        """Compare both ColPali models side by side with detailed token analysis"""
+        """Compare both ColPali models with BOTH aggregated heatmaps AND individual token analysis"""
         if not colpali_images or not query:
+            empty_galleries = [[] for _ in range(20)]  # 10 base + 10 finetuned
+            empty_rows = [gr.Row(visible=False) for _ in range(10)]
+            empty_markdowns = [gr.Markdown(visible=False) for _ in range(20)]  # 10 base + 10 finetuned
             return ("❌ No images or query available", 
                     gr.DataFrame(visible=False), gr.DataFrame(visible=False),
-                    [[] for _ in range(10)], [[] for _ in range(10)], 
-                    [gr.Row(visible=False) for _ in range(10)], 
-                    [gr.Markdown(visible=False) for _ in range(10)], 
-                    [gr.Markdown(visible=False) for _ in range(10)])
+                    []) + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns)
         
         print(f"🔍 Comparing base vs fine-tuned models for query: '{query}' on {len(colpali_images)} images")
         
-        # Analyze with base model (unoptimized - process all images)
-        print(f"🔄 Analyzing with base model...")
-        base_analysis = analyze_multiple_images(base_similarity_mapper, colpali_images, query)
-        print(f"✅ Base model analysis complete")
-          # Analyze with fine-tuned model (unoptimized - process all images)
-        print(f"🔄 Analyzing with fine-tuned model...")
-        finetuned_analysis = analyze_multiple_images(finetuned_similarity_mapper, colpali_images, query)
-        print(f"✅ Fine-tuned model analysis complete")
+        try:
+            # Initialize aggregated heatmap generators
+            base_generator = AggregatedHeatmapGenerator(base_colpali_model, base_colpali_processor)
+            finetuned_generator = AggregatedHeatmapGenerator(finetuned_colpali_model, finetuned_colpali_processor)
+            
+            # Generate aggregated comparison heatmaps for each image
+            aggregated_comparison_images = []
+            for i, image in enumerate(colpali_images[:3]):  # Limit to first 3 images for aggregated view
+                print(f"🔄 Generating aggregated heatmaps for image {i+1}...")
+                comparison_result, base_meta, finetuned_meta = create_aggregated_comparison_heatmaps(
+                    base_generator, finetuned_generator, image, query
+                )
+                if comparison_result:
+                    aggregated_comparison_images.append(comparison_result)
+                    print(f"✅ Aggregated heatmap {i+1} complete")
+            
+            # Analyze with base model for individual tokens
+            print(f"🔄 Analyzing with base model for individual tokens...")
+            base_analysis = analyze_multiple_images(base_similarity_mapper, colpali_images, query)
+            print(f"✅ Base model analysis complete: {len(base_analysis) if base_analysis else 0} results")
+            
+            # Analyze with fine-tuned model for individual tokens
+            print(f"🔄 Analyzing with fine-tuned model for individual tokens...")
+            finetuned_analysis = analyze_multiple_images(finetuned_similarity_mapper, colpali_images, query)
+            print(f"✅ Fine-tuned model analysis complete: {len(finetuned_analysis) if finetuned_analysis else 0} results")
+            
+        except Exception as e:
+            error_msg = f"❌ Error during model analysis: {str(e)}"
+            print(error_msg)
+            empty_galleries = [[] for _ in range(20)]  # 10 base + 10 finetuned
+            empty_rows = [gr.Row(visible=False) for _ in range(10)]
+            empty_markdowns = [gr.Markdown(visible=False) for _ in range(20)]  # 10 base + 10 finetuned
+            return (error_msg,
+                    gr.DataFrame(visible=False), gr.DataFrame(visible=False),
+                    []) + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns)
         
         # Prepare token analysis data
         base_token_analysis_data = []
@@ -414,18 +743,30 @@ def comparision_demo():
                 finetuned_token_analysis_data.append([token, f"{sim:.3f}", rank])
         
         # Create detailed comparison status
-        status_text = f"""✅ **Model Comparison Complete for Query:** "{query}"
+        status_text = f"""✅ **Complete Model Comparison for Query:** "{query}"
 
 **📊 Results Summary:**
 - **Base Model (vidore/colpali-v1.3):** {len(base_analysis)} images analyzed
 - **Fine-tuned Model (akashmadisetty/colpali-merged-model-hi-10k):** {len(finetuned_analysis)} images analyzed
+- **Aggregated Heatmaps Generated:** {len(aggregated_comparison_images)} comparison images
+
+**🎯 Two Analysis Types Available:**
+
+1. **Aggregated Similarity Maps**: 
+   - Overall attention patterns averaged across all query tokens
+   - Shows general focus areas for each model
+   - Useful for understanding global attention differences
+
+2. **Individual Token Analysis**:
+   - Per-token similarity heatmaps for detailed inspection
+   - Token-wise similarity scores and rankings
+   - Allows precise comparison of how each model processes specific words
 
 **💡 How to compare:** 
-- Look at token similarity scores in the tables below
-- Compare attention patterns in the side-by-side galleries
-- Higher similarity scores indicate stronger model focus on that token
-
-**🚀 UNOPTIMIZED VERSION:** Both models loaded simultaneously, all images processed, no memory constraints"""
+- **Aggregated view**: Look at overall attention patterns in the comparison images above
+- **Token tables**: Compare similarity scores between models for each word
+- **Individual galleries**: Examine per-token heatmaps for detailed analysis
+- Higher similarity scores indicate stronger model focus on that token"""
         
         # Create token analysis DataFrames
         base_token_df = gr.DataFrame(
@@ -440,14 +781,14 @@ def comparision_demo():
             visible=True
         )
         
-        # Prepare outputs for galleries (unoptimized - process all images and visualizations)
+        # Prepare outputs for galleries
         base_gallery_updates = []
         finetuned_gallery_updates = []
         row_updates = []
         base_page_info_updates = []
         finetuned_page_info_updates = []
         
-        # Process up to 10 images for multi-page display (unoptimized version)
+        # Process up to 10 images for multi-page display
         max_images = min(len(base_analysis), len(finetuned_analysis), 10)
         
         for i in range(10):  # Support up to 10 galleries in UI
@@ -456,25 +797,23 @@ def comparision_demo():
                 finetuned_result = finetuned_analysis[i]
                 
                 if base_result["success"] and finetuned_result["success"]:
-                    # Convert base64 visualizations to images for base model (no size limits)
+                    # Convert base64 visualizations to images for base model
                     base_vis_images = []
-                    for j, vis_b64 in enumerate(base_result["visualizations"]):  # All visualizations
+                    for j, vis_b64 in enumerate(base_result["visualizations"]):
                         try:
                             img_data = base64.b64decode(vis_b64)
                             img = Image.open(io.BytesIO(img_data))
-                            # NO thumbnail resizing in unoptimized version
                             base_vis_images.append(img)
                         except Exception as e:
                             print(f"Error processing base model visualization {j}: {e}")
                             continue
                     
-                    # Convert base64 visualizations to images for fine-tuned model (no size limits)
+                    # Convert base64 visualizations to images for fine-tuned model
                     finetuned_vis_images = []
-                    for j, vis_b64 in enumerate(finetuned_result["visualizations"]):  # All visualizations
+                    for j, vis_b64 in enumerate(finetuned_result["visualizations"]):
                         try:
                             img_data = base64.b64decode(vis_b64)
                             img = Image.open(io.BytesIO(img_data))
-                            # NO thumbnail resizing in unoptimized version
                             finetuned_vis_images.append(img)
                         except Exception as e:
                             print(f"Error processing fine-tuned model visualization {j}: {e}")
@@ -484,7 +823,7 @@ def comparision_demo():
                     finetuned_gallery_updates.append(finetuned_vis_images)
                     row_updates.append(gr.Row(visible=True))
                     
-                    # Create detailed page info for base model (show all tokens, not just top 5)
+                    # Create detailed page info for base model
                     base_token_breakdown = []
                     for rank, token_data in enumerate(base_result.get("token_scores", []), 1):
                         token = token_data["token"]
@@ -493,9 +832,9 @@ def comparision_demo():
                     
                     base_page_info_text = f"""**Page {i+1} - Base Model Tokens:**
 {chr(10).join(base_token_breakdown[:10])}  
-**Visualizations:** {len(base_vis_images)} (full resolution)"""
+**Visualizations:** {len(base_vis_images)}"""
                     
-                    # Create detailed page info for fine-tuned model (show all tokens, not just top 5)
+                    # Create detailed page info for fine-tuned model
                     finetuned_token_breakdown = []
                     for rank, token_data in enumerate(finetuned_result.get("token_scores", []), 1):
                         token = token_data["token"]
@@ -504,7 +843,7 @@ def comparision_demo():
                     
                     finetuned_page_info_text = f"""**Page {i+1} - Fine-tuned Model Tokens:**
 {chr(10).join(finetuned_token_breakdown[:10])}  
-**Visualizations:** {len(finetuned_vis_images)} (full resolution)"""
+**Visualizations:** {len(finetuned_vis_images)}"""
                     
                     base_page_info_updates.append(gr.Markdown(value=base_page_info_text, visible=True))
                     finetuned_page_info_updates.append(gr.Markdown(value=finetuned_page_info_text, visible=True))
@@ -522,17 +861,22 @@ def comparision_demo():
                 finetuned_page_info_updates.append(gr.Markdown(visible=False))
         
         # Return all outputs in the expected order
-        return (status_text, base_token_df, finetuned_token_df) + tuple(base_gallery_updates) + tuple(finetuned_gallery_updates) + tuple(row_updates) + tuple(base_page_info_updates) + tuple(finetuned_page_info_updates)
+        # Format: (status, base_token_df, finetuned_token_df, aggregated_gallery, base_galleries, finetuned_galleries, rows, base_infos, finetuned_infos)
+        return (status_text, base_token_df, finetuned_token_df, aggregated_comparison_images) + tuple(base_gallery_updates) + tuple(finetuned_gallery_updates) + tuple(row_updates) + tuple(base_page_info_updates) + tuple(finetuned_page_info_updates)
     
+    # Clean up - we're using the backup approach so these functions are not needed
+    # The backup approach uses analyze_multiple_images directly instead of the aggregated approach
+
+    # ...existing code for other functions...
+
     # Create the Gradio interface
     with gr.Blocks(theme=gr.themes.Monochrome(radius_size=gr.themes.sizes.radius_none)) as demo:
         gr.Markdown("""
-        # 👁️👁️ Vision RAG Playground - ORIGINAL UNOPTIMIZED VERSION
+        # 👁️👁️ Vision RAG Playground
         
         ### Explore and Compare Vision-Augmented Retrieval Techniques
         Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrieval and Generation
         
-        **🔥 UNOPTIMIZED VERSION**: Both models loaded simultaneously, no memory constraints!
         
         1. **Simple RAG**: Text-based retrieval with OCR support for scanned documents.
         2. **Vision RAG**: Combines text and image retrieval using cross-modal embeddings.
@@ -553,7 +897,11 @@ def comparision_demo():
             top_k_slider = gr.Slider(1, 10, value=3, step=1, label="Top K Results")
             sequential_checkbox = gr.Checkbox(label="Sequential Retrieval", value=False)
             retrieve_button = gr.Button("Retrieve")
-            query_button = gr.Button("Query")
+            
+            # Add progress indicator for query processing
+            gr.Markdown("### ⚡ Query Processing Status")
+            query_button = gr.Button("🚀 Query All RAG Systems", variant="primary")
+            gr.Markdown("**Note**: This will take ~2 minutes due to rate limiting (30s + 30s + 60s delays)")
             
             retrieval_timing = gr.DataFrame(label="Retrieval Timings", headers=["RAG Type", "Time (s)"])
             
@@ -576,14 +924,15 @@ def comparision_demo():
                     with gr.Accordion("HybridColpaliRAG", open=True):
                         hybrid_gallery = gr.Gallery(label="HybridColpaliRAG Images")
                         hybrid_response = gr.Markdown(label="HybridColpaliRAG Response")
-        
+
         with gr.Tab("ColPali Model Comparison"):
             gr.Markdown("""
-            ## � ColPali Model Comparison - Base vs Fine-tuned
+            ## 🔍 ColPali Model Comparison - Base vs Fine-tuned
             
             **Left Half**: Base Model (`vidore/colpali-v1.3`)  
             **Right Half**: Fine-tuned Model (`akashmadisetty/colpali-merged-model-hi-10k`)
-              First perform a retrieval in the "Retrieve and Query Data" tab, then come here to compare models.
+            
+            First perform a retrieval in the "Retrieve and Query Data" tab, then come here to compare models.
             """)
             
             with gr.Row():
@@ -604,6 +953,23 @@ def comparision_demo():
                     rows=2,
                     height="400px"
                 )
+            
+            # Aggregated Similarity Maps Comparison
+            with gr.Row():
+                aggregated_comparison_gallery = gr.Gallery(
+                    label="🔥 Aggregated Similarity Maps Comparison (Base vs Fine-tuned)",
+                    show_label=True,
+                    columns=2,
+                    rows=2,
+                    height="600px"
+                )
+            
+            gr.Markdown("""
+            ---
+            ## 📊 Individual Token Analysis
+            
+            Below you'll find detailed token-by-token analysis showing how each model processes individual words in your query.
+            """)
             
             # Token Analysis Results for both models
             with gr.Row():
@@ -646,16 +1012,34 @@ def comparision_demo():
             
             with gr.Row():
                 interpretation_info = gr.Markdown("""
-                **How to use:**
-                1. Go to "Retrieve and Query Data" tab
-                2. Enter a query and click "Retrieve"
-                3. Come back here and click "🎯 Compare ColPali Models"
-                4. Analyze token scores and similarity maps for both models
-                  **Understanding the Results:**
-                - **Token Analysis Tables**: Show how much each word/token contributes to the query match
-                - **Similarity Maps**: Visual heatmaps showing where the model focuses for each token
-                - **Multiple Pages**: If ColPali retrieved multiple pages, each will have its own comparison section
+                **How to use this comprehensive comparison:**
+                
+                1. **Step 1**: Go to "Retrieve and Query Data" tab
+                2. **Step 2**: Enter a query and click "Retrieve"  
+                3. **Step 3**: Come back here and click "🎯 Compare ColPali Models"
+                4. **Step 4**: Analyze both types of results:
+
+                **📊 Understanding the Two Analysis Types:**
+                
+                **🔥 Aggregated Similarity Maps** (Top section):
+                - Shows overall attention patterns averaged across all query tokens
+                - Side-by-side comparison images of base vs fine-tuned models
+                - Great for understanding general differences in model behavior
+                - Each row shows: Original → Pure Heatmap → Overlay for each model
+                
+                **📝 Individual Token Analysis** (Bottom section):
+                - **Token Tables**: Detailed similarity scores for each word in your query
+                - **Per-Page Galleries**: Token-by-token heatmaps for precise analysis  
+                - **Multiple Pages**: If ColPali retrieved multiple pages, each gets its own section
+                - Compare how each model processes individual words vs overall patterns
+                
+                **💡 Analysis Tips:**
+                - Look for differences in attention strength (color intensity)
+                - Compare token rankings between models in the tables
+                - Check if fine-tuned model focuses on more relevant areas
+                - Use aggregated view for overview, individual tokens for details
                 """)
+        
         
         with gr.Tab("Settings"):
             api_key_input = gr.Textbox(label="OpenAI API Key", type="password")
@@ -686,18 +1070,6 @@ def comparision_demo():
                 query
             )
         
-        def update_query_results(query, retrieved_results):
-            if not retrieved_results:
-                return "❌ No retrieval results", "❌ No retrieval results", "❌ No retrieval results", "❌ No retrieval results"
-            
-            results = query_data(query, retrieved_results)
-            return (
-                results["SimpleRAG"]["response"],
-                results["VisionRAG"]["response"],
-                results["ColpaliRAG"]["response"],
-                results["HybridColpaliRAG"]["response"],
-            )
-        
         def update_api_key(api_key):
             os.environ["OPENAI_API_KEY"] = api_key
             return "✅ API key updated successfully"
@@ -711,30 +1083,20 @@ def comparision_demo():
         
         def handle_model_comparison(retrieved_results, current_query):
             if not retrieved_results or "ColpaliRAG" not in retrieved_results:
-                # Return error for all 55 expected outputs
-                empty_galleries = [[] for _ in range(10)]
+                # Return empty/error state with correct number of outputs (6 + 50 = 56 total)
+                empty_galleries = [[] for _ in range(20)]  # 10 base + 10 finetuned
                 empty_rows = [gr.Row(visible=False) for _ in range(10)]
-                empty_markdowns = [gr.Markdown(visible=False) for _ in range(10)]
-                return (
-                    "❌ No ColPali results available",  # comparison_status
-                    [],  # retrieved_images_gallery
-                    gr.DataFrame(visible=False),  # base_token_analysis
-                    gr.DataFrame(visible=False),  # finetuned_token_analysis  
-                    "No query available"  # current_query_display
-                ) + tuple(empty_galleries) + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns) + tuple(empty_markdowns)
+                empty_markdowns = [gr.Markdown(visible=False) for _ in range(20)]  # 10 base + 10 finetuned
+                return ("❌ No ColPali results available", [], gr.DataFrame(visible=False), gr.DataFrame(visible=False), 
+                        [], "No query available") + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns)
             
             if not current_query:
-                # Return error for all 55 expected outputs
-                empty_galleries = [[] for _ in range(10)]
+                # Return empty/error state with correct number of outputs (6 + 50 = 56 total)
+                empty_galleries = [[] for _ in range(20)]  # 10 base + 10 finetuned
                 empty_rows = [gr.Row(visible=False) for _ in range(10)]
-                empty_markdowns = [gr.Markdown(visible=False) for _ in range(10)]
-                return (
-                    "❌ No query available",  # comparison_status
-                    [],  # retrieved_images_gallery
-                    gr.DataFrame(visible=False),  # base_token_analysis
-                    gr.DataFrame(visible=False),  # finetuned_token_analysis
-                    "No query available"  # current_query_display
-                ) + tuple(empty_galleries) + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns) + tuple(empty_markdowns)
+                empty_markdowns = [gr.Markdown(visible=False) for _ in range(20)]  # 10 base + 10 finetuned
+                return ("❌ No query available", [], gr.DataFrame(visible=False), gr.DataFrame(visible=False), 
+                        [], "No query available") + tuple(empty_galleries) + tuple(empty_rows) + tuple(empty_markdowns)
             
             # Get ColPali images - they are already PIL Image objects from the RAG system
             colpali_images = retrieved_results["ColpaliRAG"]
@@ -755,23 +1117,23 @@ def comparision_demo():
                     print(f"Unexpected image type: {type(img)}")
                     continue
             
-            # Get comparison results from compare_colpali_models
+            # Get comparison results from compare_colpali_models (returns 54 items: status, base_df, finetuned_df, aggregated_gallery + 50 comparison items)
             comparison_results = compare_colpali_models(current_query, valid_images)
             
-            # Extract the results (compare_colpali_models returns 53 items)
-            status_text = comparison_results[0]
-            base_token_df = comparison_results[1] 
-            finetuned_token_df = comparison_results[2]
-            # Items 3-12: base galleries, 13-22: finetuned galleries, 23-32: rows, 33-42: base infos, 43-52: finetuned infos
+            # Convert images to gallery format for display
+            retrieved_images_for_display = []
+            for img in valid_images[:5]:  # Show top 5 images
+                retrieved_images_for_display.append(img)  # Gradio can handle PIL Images directly
             
-            # Now return all 55 expected outputs
-            return (
-                status_text,  # comparison_status
-                valid_images,  # retrieved_images_gallery (this was missing!)
-                base_token_df,  # base_token_analysis
-                finetuned_token_df,  # finetuned_token_analysis
-                current_query  # current_query_display
-            ) + comparison_results[3:]  # All the remaining 50 outputs from compare_colpali_models
+            # Return in the correct format: 56 total outputs
+            # Expected order: status, images_gallery, base_token_df, finetuned_token_df, aggregated_gallery, current_query, then 50 comparison items
+            return (comparison_results[0],  # status
+                    retrieved_images_for_display,  # images_gallery 
+                    comparison_results[1],  # base_token_df
+                    comparison_results[2],  # finetuned_token_df
+                    comparison_results[3],  # aggregated_gallery
+                    current_query) + comparison_results[4:]  # current_query + 50 comparison items
+
         
         # Event handlers
         ingest_button.click(
@@ -789,17 +1151,20 @@ def comparision_demo():
             ]
         )
         
+        # Use generator pattern for progressive updates with rate limiting
         query_button.click(
-            update_query_results,
+            query_data,
             inputs=[query_input, retrieved_results],
-            outputs=[simple_response, vision_response, colpali_response, hybrid_response]        )
+            outputs=[simple_response, vision_response, colpali_response, hybrid_response]
+        )
         
         compare_button.click(
             handle_model_comparison,
             inputs=[retrieved_results, current_query],
             outputs=[
                 comparison_status, retrieved_images_gallery, 
-                base_token_analysis, finetuned_token_analysis, current_query_display
+                base_token_analysis, finetuned_token_analysis, 
+                aggregated_comparison_gallery, current_query_display
             ] + [gallery for _, gallery, _, _, _ in comparison_galleries] + 
               [gallery for _, _, gallery, _, _ in comparison_galleries] + 
               [row for row, _, _, _, _ in comparison_galleries] + 
@@ -819,7 +1184,7 @@ def comparision_demo():
             outputs=[table_update_status]
         )
     
-    print("🎉 Interface ready!")
+    print("🎉 Interface ready with rate limiting!")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
-    
-    
+    return demo
+
