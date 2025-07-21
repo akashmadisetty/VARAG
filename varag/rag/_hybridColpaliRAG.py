@@ -19,6 +19,7 @@ from torch.utils.data import Dataset
 from sentence_transformers import SentenceTransformer
 from colpali_engine.models import ColPali
 from colpali_engine.models.paligemma.colpali.processing_colpali import ColPaliProcessor
+from colpali_engine.compression.token_pooling import HierarchicalTokenPooler
 from varag.utils import get_model_colpali
 
 T = TypeVar("T")
@@ -41,11 +42,13 @@ class HybridColpaliRAG:
         image_embedding_model: SentenceTransformer,
         colpali_model: Optional[ColPali] = None,
         colpali_processor: Optional[ColPaliProcessor] = None,
-        model_name: str = "vidore/colpali-v1.2",
+        model_name: str = "vidore/colpali-v1.3",
         db: Union[lancedb.connect, None] = None,
         db_path: str = "~/lancedb",
         table_name: str = "hybrid_colpali_rag_table",
         overwrite: bool = False,
+        use_token_pooling: bool = True,
+        pool_factor: int = 3,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
@@ -56,7 +59,12 @@ class HybridColpaliRAG:
         else:
             self.colpali_model = colpali_model
             self.colpali_processor = colpali_processor
-
+        
+        self.use_token_pooling = use_token_pooling
+        self.pool_factor = pool_factor
+        if self.use_token_pooling:
+            self.token_pooler = HierarchicalTokenPooler()
+            print(f"Token pooling enabled with factor {pool_factor}")
         if db is None:
             self.db_path = os.path.expanduser(db_path)
             self.db = lancedb.connect(self.db_path)
@@ -147,6 +155,21 @@ class HybridColpaliRAG:
             with torch.no_grad():
                 batch = {k: v.to(self.device) for k, v in batch.items()}
                 embedding = self.colpali_model(**batch)
+
+                # Apply token pooling if enabled
+                if self.use_token_pooling:
+                    if verbose:
+                        print(f"Applying token pooling with factor {self.pool_factor}")
+                        print(f"Original embedding shape: {embedding.shape}")
+                    embedding = self.token_pooler.pool_embeddings(
+                        embedding,
+                        pool_factor=self.pool_factor,
+                        padding=True,
+                        padding_side=self.colpali_processor.tokenizer.padding_side,
+                    )
+                    if verbose:
+                        print(f"Pooled embedding shape: {embedding.shape}")
+
             embeddings.extend(list(torch.unbind(embedding.cpu())))
         return embeddings
 
@@ -262,6 +285,7 @@ class HybridColpaliRAG:
             f"Indexing complete. Total documents in {self.table_name}: {len(self.table)}"
         )
 
+    @staticmethod
     def flatten_and_zero_pad(tensor, desired_length):
         """Flattens a PyTorch tensor and zero-pads it to a desired length.
 
@@ -331,6 +355,19 @@ class HybridColpaliRAG:
             qs = self.get_query_embedding(
                 query, model=self.colpali_model, processor=self.colpali_processor
             )
+            
+            # Apply token pooling to query if enabled
+            if self.use_token_pooling:
+                qs["embeddings"] = [
+                    self.token_pooler.pool_embeddings(
+                        embedding.unsqueeze(0),
+                        pool_factor=self.pool_factor,
+                        padding=True,
+                        padding_side=self.colpali_processor.tokenizer.padding_side,
+                    ).squeeze(0)
+                    for embedding in qs["embeddings"]
+                ]
+                
             query_embedding = self.embed_text(query)
 
             if use_image_search:

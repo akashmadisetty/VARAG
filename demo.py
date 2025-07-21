@@ -14,6 +14,8 @@ import concurrent.futures
 from varag.rag import SimpleRAG, VisionRAG, ColpaliRAG, HybridColpaliRAG
 from varag.vlms import OpenAI
 from varag.llms import OpenAI as OpenAILLM
+from varag.vlms import LiteLLMVLM 
+from varag.llms import LiteLLM 
 from varag.chunking import FixedTokenChunker
 from varag.utils import get_model_colpali
 import argparse
@@ -31,7 +33,7 @@ text_embedding_model = SentenceTransformer("BAAI/bge-base-en", trust_remote_code
 image_embedding_model = SentenceTransformer(
     "jinaai/jina-clip-v1", trust_remote_code=True
 )
-colpali_model, colpali_processor = get_model_colpali("vidore/colpali-v1.2")
+colpali_model, colpali_processor = get_model_colpali("vidore/colpali-v1.3")
 
 # Initialize RAG instances
 simple_rag = SimpleRAG(
@@ -55,8 +57,22 @@ hybrid_rag = HybridColpaliRAG(
 )
 
 # Initialize VLM
-vlm = OpenAI()
-llm = OpenAILLM()
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+# Initialize LLM and VLM with Groq by default
+if gemini_api_key:
+    gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
+    gem_llm = LiteLLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
+    gem_vlm = LiteLLMVLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
+
+    llm = gem_llm
+    vlm = gem_vlm
+    print(f"Using Groq with model: {gemini_model}")
+else:
+    # For backward compatibility, use the existing initialization
+    vlm = OpenAI()
+    llm = OpenAILLM()
+    print("Switching to OpenAI provider as no LiteLLM API key is provided.")
 
 IngestResult = namedtuple("IngestResult", ["status_text", "progress_table"])
 
@@ -305,11 +321,11 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
 
         with gr.Tab("Ingest Data"):
             pdf_input = gr.File(
-                label="Upload PDF(s)", file_count="multiple", file_types=["pdf"]
+                label="Upload PDF(s)", file_count="multiple", file_types=[".pdf"]
             )
             use_ocr = gr.Checkbox(label="Use OCR (for SimpleRAG)")
             chunk_size = gr.Slider(
-                50, 5000, value=200, step=10, label="Chunk Size (for SimpleRAG)"
+                50, 5000, value=300, step=10, label="Chunk Size (for SimpleRAG)"
             )
             ingest_button = gr.Button("Ingest PDFs")
             ingest_output = gr.Markdown(
@@ -402,14 +418,126 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
         )
 
         def update_query_results(query, retrieved_results):
-            results = query_data(query, retrieved_results)
-            return (
-                results["SimpleRAG"]["response"],
-                results["VisionRAG"]["response"],
-                results["ColpaliRAG"]["response"],
-                results["HybridColpaliRAG"]["response"],
+            # Initialize empty responses
+            responses = {
+                "SimpleRAG": {"response": "Processing..."},
+                "VisionRAG": {"response": "Waiting..."},
+                "ColpaliRAG": {"response": "Waiting..."},
+                "HybridColpaliRAG": {"response": "Waiting..."}
+            }
+            
+            # Process SimpleRAG first
+            responses["SimpleRAG"] = query_data_single(query, retrieved_results, "SimpleRAG")
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            
+            # Wait to avoid rate limit
+            time.sleep(30)
+            
+            # Process VisionRAG
+            responses["VisionRAG"]["response"] = "Processing..."
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            responses["VisionRAG"] = query_data_single(query, retrieved_results, "VisionRAG")
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            
+            # Process ColpaliRAG
+            time.sleep(30)
+            responses["ColpaliRAG"]["response"] = "Processing..."
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            responses["ColpaliRAG"] = query_data_single(query, retrieved_results, "ColpaliRAG")
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            
+            # Process HybridColpaliRAG
+            time.sleep(60)
+            responses["HybridColpaliRAG"]["response"] = "Processing..."
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
+            )
+            responses["HybridColpaliRAG"] = query_data_single(query, retrieved_results, "HybridColpaliRAG")
+            yield (
+                responses["SimpleRAG"]["response"],
+                responses["VisionRAG"]["response"],
+                responses["ColpaliRAG"]["response"],
+                responses["HybridColpaliRAG"]["response"],
             )
 
+        # Helper function to query a single RAG model
+        def query_data_single(query, retrieved_results, model_name):
+            if model_name == "SimpleRAG":
+                simple_context = retrieved_results["SimpleRAG"]
+                simple_response = llm.query(
+                    context=simple_context,
+                    system_prompt="Given the below information answer the questions",
+                    query=query,
+                )
+                return {"response": simple_response, "context": simple_context}
+            
+            elif model_name == "VisionRAG":
+                vision_images = retrieved_results["VisionRAG"]
+                vision_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(vision_images))]
+                )
+                vision_response = vlm.query(vision_context, vision_images, max_tokens=500)
+                return {
+                    "response": vision_response,
+                    "context": vision_context,
+                    "images": vision_images,
+                }
+            
+            elif model_name == "ColpaliRAG":
+                colpali_images = retrieved_results["ColpaliRAG"]
+                colpali_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(colpali_images))]
+                )
+                colpali_response = vlm.query(colpali_context, colpali_images, max_tokens=500)
+                return {
+                    "response": colpali_response,
+                    "context": colpali_context,
+                    "images": colpali_images,
+                }
+            
+            elif model_name == "HybridColpaliRAG":
+                hybrid_images = retrieved_results["HybridColpaliRAG"]
+                hybrid_context = f"Query: {query}\n\nRelevant image information:\n" + "\n".join(
+                    [f"Image {i+1}" for i in range(len(hybrid_images))]
+                )
+                hybrid_response = vlm.query(hybrid_context, hybrid_images, max_tokens=500)
+                return {
+                    "response": hybrid_response,
+                    "context": hybrid_context,
+                    "images": hybrid_images,
+                }
+            
+            return {"response": "Model not recognized", "context": ""}
+
+        # Update button click to use the generator pattern
         query_button.click(
             update_query_results,
             inputs=[query_input, retrieved_results],
@@ -417,8 +545,8 @@ Built on [VARAG](https://github.com/adithya-s-k/VARAG) - Vision-Augmented Retrie
                 simple_response,
                 vision_response,
                 colpali_response,
-                hybrid_response,
-            ],
+                hybrid_response
+            ]
         )
 
         ingest_button.click(
