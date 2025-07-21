@@ -2,7 +2,7 @@
 Vision Augmented Retrieval and Generation
 
 
-| ![VARAG](./docs/assets/llama.png)| VARAG (Vision-Augmented Retrieval and Generation) is a vision-first RAG engine that emphasizes vision-based retrieval techniques. It enhances traditional Retrieval-Augmented Generation (RAG) systems by integrating both visual and textual data through Vision-Language models. |
+| ![VARAG](assets/llama.png)| VARAG (Vision-Augmented Retrieval and Generation) is a vision-first RAG engine that emphasizes vision-based retrieval techniques. It enhances traditional Retrieval-Augmented Generation (RAG) systems by integrating both visual and textual data through Vision-Language models. |
 |:--:|:--|
 
 [![GitHub Stars](https://img.shields.io/github/stars/adithya-s-k/VARAG?style=social)](https://github.com/adithya-s-k/VARAG/stargazers)
@@ -11,6 +11,41 @@ Vision Augmented Retrieval and Generation
 [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/adithya-s-k/VARAG)](https://github.com/adithya-s-k/VARAG/pulls)
 [![License](https://img.shields.io/github/license/adithya-s-k/VARAG)](https://github.com/adithya-s-k/VARAG/blob/main/LICENSE)
 
+## 🌟 Key Features
+
+VARAG offers a comprehensive set of features designed for vision-augmented document retrieval and generation:
+
+### 🔍 **Multiple Retrieval Strategies**
+- **Simple RAG**: Text extraction with OCR using Docling
+- **Vision RAG**: Cross-modal retrieval with JinaCLIP embeddings
+- **ColPali RAG**: Direct document page embeddings with late interaction
+- **Hybrid ColPali RAG**: Combined image embeddings and ColPali re-ranking
+
+### 🤖 **Multi-Provider LLM/VLM Support**
+- **OpenAI Integration**: Support for GPT-4o, GPT-4o-mini and other vision models
+- **LiteLLM Provider**: Unified interface for 100+ LLM providers including:
+  - Anthropic Claude
+  - Google Gemini
+  - Groq
+  - And many more through LiteLLM
+
+### 📊 **Advanced Interpretability**
+- **ColPali Similarity Maps**: Visual heatmaps showing attention patterns
+- **Token-level Analysis**: Understand model focus on document regions
+- **Comparative Analysis**: Compare different ColPali model performances
+- **Interactive Visualizations**: Explore retrieval results with similarity overlays
+
+### 🔧 **Flexible Architecture**
+- **Modular Design**: Mix and match components easily
+- **LanceDB Integration**: High-performance vector storage
+- **Custom Chunking**: Configurable text splitting strategies
+- **Environment Management**: Support for multiple Python environments
+
+### 🎯 **Interactive Demo**
+- **Gradio Interface**: Web-based demo for testing different RAG approaches
+- **Real-time Comparison**: Side-by-side evaluation of retrieval techniques
+- **Progress Tracking**: Monitor ingestion and retrieval progress
+- **API Key Management**: Secure handling of different provider credentials
 
 
 ### Supported Retrieval Techniques
@@ -30,6 +65,26 @@ ColPali RAG represents a cutting-edge approach that simplifies the traditional r
 Hybrid ColPali RAG further enhances retrieval performance by combining the strengths of both image embeddings and ColPali’s late interaction mechanism. In this approach, the system first performs a coarse retrieval step using image embeddings (e.g., from a model like JinaCLIP) to retrieve the top-k relevant document pages. Then, in a second pass, the system re-ranks these k pages using the ColPali late interaction mechanism to identify the final set of most relevant pages based on both visual and textual information. This hybrid approach is particularly useful when documents contain a mixture of complex visuals and detailed text, allowing the system to leverage both content types for highly accurate document retrieval.
 
 </details>
+
+## 🏗️ Architecture Overview
+
+VARAG follows a modular architecture that separates concerns and enables easy experimentation:
+
+```
+VARAG/
+├── varag/
+│   ├── rag/           # Core RAG implementations
+│   ├── llms/          # Language model providers
+│   ├── vlms/          # Vision-language model providers
+│   ├── models/        # Model utilities and configurations
+│   ├── chunking/      # Text chunking strategies
+│   └── utils.py       # Utility functions and similarity mapping
+├── examples/          # Usage examples and demos
+│   ├── base_implementation/  # Base embedding implementations
+│   └── inference_colpali/   # ColPali interpretation tools
+├── docs/             # Documentation and notebooks
+└── demo.py          # Interactive Gradio demo
+```
 
 ---
 
@@ -70,6 +125,17 @@ To install OCR dependencies:
 
 ```bash
 pip install -e .["ocr"]
+```
+### 4. Set Up API Keys
+
+Create a `.env` file in the project root:
+
+```bash
+# For OpenAI
+OPENAI_API_KEY="your-openai-api-key"
+
+# For Google Gemini (via LiteLLM)
+GEMINI_API_KEY="your-gemini-api-key"
 ```
 
 ---
@@ -119,6 +185,33 @@ The abstraction is designed to simplify the process of experimenting with differ
 This paradigm is inspired by the [Byaldi](https://github.com/AnswerDotAI/byaldi) repo by Answer.ai.
 
 ---
+### ColPali Similarity Analysis
+
+```python
+from varag.utils import create_similarity_mapper, analyze_multiple_images
+
+# Create similarity mapper
+similarity_mapper = create_similarity_mapper(colpali_model, colpali_processor)
+
+# Analyze single image
+result = similarity_mapper.analyze_image_with_query(
+    image_path, 
+    "What are the key findings?"
+)
+
+# Analyze multiple images
+results = analyze_multiple_images(
+    similarity_mapper,
+    [image1, image2, image3],
+    "Compare the results across these documents"
+)
+```
+
+### ColPali Interpretability Tools
+Advanced analysis tools in `examples/inference_colpali/`:
+- **Similarity Heatmaps**: Visual attention maps for query-document matching
+- **Model Comparison**: Compare different ColPali model versions
+- **Token-level Analysis**: Understand fine-grained model behavior
 
 ### Techniques and Notebooks
 
