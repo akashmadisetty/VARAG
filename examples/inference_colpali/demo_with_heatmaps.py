@@ -89,7 +89,7 @@ gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 # Initialize LLM and VLM with Groq by default
 if gemini_api_key:
-    gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
+    gemini_model = "gemini/gemini-2.5-flash"
     gem_llm = LiteLLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
     gem_vlm = LiteLLMVLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
 
