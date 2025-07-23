@@ -53,7 +53,7 @@ inference_image = (
 @app.function(
     image=inference_image,
     gpu="L4",  # Use powerful GPU for unoptimized version
-    timeout=7200,  # 2 hour timeout
+    timeout=3600,  # 2 hour timeout
     volumes={
         VOLUME_PATH: col_vol,
     },
@@ -695,7 +695,7 @@ def comparision_demo():
             
             # Generate aggregated comparison heatmaps for each image
             aggregated_comparison_images = []
-            for i, image in enumerate(colpali_images[:3]):  # Limit to first 3 images for aggregated view
+            for i, image in enumerate(colpali_images[:10]):  # Limit to first 3 images for aggregated view
                 print(f"🔄 Generating aggregated heatmaps for image {i+1}...")
                 comparison_result, base_meta, finetuned_meta = create_aggregated_comparison_heatmaps(
                     base_generator, finetuned_generator, image, query

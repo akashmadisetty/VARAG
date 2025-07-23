@@ -59,15 +59,15 @@ hybrid_rag = HybridColpaliRAG(
 # Initialize VLM
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 
-# Initialize LLM and VLM with Groq by default
+# Initialize LLM and VLM with LiteLLM by default
 if gemini_api_key:
-    gemini_model = "gemini/gemini-2.5-flash-preview-04-17"
+    gemini_model = "gemini/gemini-2.5-flash"
     gem_llm = LiteLLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
     gem_vlm = LiteLLMVLM(model=gemini_model, api_key=gemini_api_key, verbose=False)
 
     llm = gem_llm
     vlm = gem_vlm
-    print(f"Using Groq with model: {gemini_model}")
+    print(f"Using LiteLLM with model: {gemini_model}")
 else:
     # For backward compatibility, use the existing initialization
     vlm = OpenAI()
