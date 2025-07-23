@@ -25,7 +25,7 @@ inference_image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
     .apt_install("git")
     .run_commands([
-        "git clone https://github.com/akashmadisetty/VARAG",
+        "git clone https://github.com/adithya-s-k/VARAG",
         "cd VARAG && pip install -e ."
     ])
     .pip_install("colpali-engine[interpretability]")
