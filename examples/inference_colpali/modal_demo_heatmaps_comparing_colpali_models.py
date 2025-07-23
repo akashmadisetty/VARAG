@@ -53,7 +53,7 @@ inference_image = (
 @app.function(
     image=inference_image,
     gpu="L4",  # Use powerful GPU for unoptimized version
-    timeout=3600,  # 2 hour timeout
+    timeout=3600,  # 1 hour timeout
     volumes={
         VOLUME_PATH: col_vol,
     },
